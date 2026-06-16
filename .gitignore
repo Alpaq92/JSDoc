@@ -1,5 +1,5 @@
 node_modules/
 test/fixtures/
 package-lock.json
-.serve.js
+.serve*.js
 .claude/
