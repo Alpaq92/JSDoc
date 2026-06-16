@@ -92,8 +92,9 @@
 <div class="wrap">
   <h1>JSDoc</h1>
   <p class="sub">
-    Extracts text from legacy Microsoft Word <strong>97–2003 binary <code>.doc</code></strong>
-    files — entirely in your browser. Pure JavaScript, zero dependencies, clean-room from
+    Reads — and writes — legacy Microsoft Word <strong>97–2003 binary <code>.doc</code></strong>
+    files entirely in your browser: text, formatting, tables, footnotes/headers, and images.
+    Pure JavaScript, zero dependencies, clean-room from
     the <a href="https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/ccd7b486-7881-484c-a137-51170af7cc22" target="_blank" rel="noopener">[MS-DOC]</a>
     /
     <a href="https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/53989ce4-7b05-4f8d-829b-d08d6148375b" target="_blank" rel="noopener">[MS-CFB]</a>
@@ -134,10 +135,11 @@
   <footer>
     Source &amp; tests:
     <a href="https://github.com/Alpaq92/JSDoc" target="_blank" rel="noopener">github.com/Alpaq92/JSDoc</a>.
-    Lossy by design (main-body text + paragraph breaks); returns nothing for Word 6/95,
-    encrypted, or non-<code>.doc</code> files, exactly like the host's download fallback.
-    The “Formatted” view rebuilds tables from the extracted tab/newline structure — it is
-    not a pixel-faithful render of the original document.
+    Shows body text, footnotes/headers, character styling, tables and embedded PNG/JPEG, with
+    tracked deletions dropped; <strong>Download .doc</strong> writes a real (text-only) Word file
+    back. It is <em>not</em> a pixel-faithful render — exact page layout and WMF/EMF images need a
+    full engine — and it returns nothing for Word 6/95, encrypted, or non-<code>.doc</code> files
+    (the host's download fallback).
   </footer>
 </div>
 

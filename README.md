@@ -5,21 +5,23 @@
 [![Live demo](https://img.shields.io/badge/demo-live-success)](https://alpaq92.github.io/JSDoc/)
 [![License: 0BSD](https://img.shields.io/badge/License-0BSD-blue.svg)](LICENSE)
 
-Reads the text out of legacy Microsoft Word `.doc` files (Word 97–2003, the old binary OLE2 format) — right in the browser, with no dependencies. The whole API is one function:
+**Reads — and writes — legacy Microsoft Word `.doc` files** (Word 97–2003, the old binary OLE2 format), right in the browser, with no dependencies. Written clean-room from Microsoft's published specs, so it ships under `0BSD`.
 
 ```js
-docToText(input) // → string, or null if the file can't be read
+docToText(input)          // → body text (string), or null if it can't be read
+docToText.sections(input) // → { body, footnotes, headers, … } — text of each story
+docToText.html(input)     // → styled HTML per story (bold/italic/size/colour/font + tables)
+docToText.images(input)   // → [{ mime, bytes }] — embedded PNG/JPEG
+textToDoc(text)           // → Uint8Array — write a minimal binary .doc back
 ```
 
-Give it an `ArrayBuffer`, `Uint8Array`, or Node `Buffer`; you get back the document's body text, or `null` when the file is something it won't touch (Word 6/95, encrypted, not a `.doc`, or corrupt) — your cue to fall back to a download link.
-
-It's written from scratch against Microsoft's published format specs, with no GPL code anywhere near it, so it ships under `0BSD` and drops cleanly into a permissive codebase.
+`docToText` takes an `ArrayBuffer`, `Uint8Array`, or Node `Buffer`; it returns the body text, or `null` when the file is something it won't touch (Word 6/95, encrypted, not a `.doc`, corrupt) — your cue to fall back to a download link. `textToDoc` is the inverse. No GPL code anywhere near it, so the whole thing drops cleanly into a permissive codebase.
 
 ## Try it
 
 **▶ Live demo: <https://alpaq92.github.io/JSDoc/>**
 
-[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and the text appears, extracted locally — nothing is uploaded. Three views: **Formatted** (rebuilds tables), **Plain text**, and **Edit** (editable in place).
+[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and it's parsed locally — nothing is uploaded. Three views — **Formatted** (styling, tables, footnotes/headers, and an image gallery), **Plain text**, and **Edit** (editable in place) — plus **Download** as `.txt`, `.html`, or a real `.doc`.
 
 - **Locally:** serve the folder (`npx serve`, or `python -m http.server`) and open `index.html`.
 - **On GitHub Pages:** Settings → Pages → deploy from `main` / root, then it's live at <https://alpaq92.github.io/JSDoc/>. The sample in [`samples/`](samples/) is bundled, so the page needs no network at all.
