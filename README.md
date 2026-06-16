@@ -17,10 +17,12 @@ It's written from scratch against Microsoft's published format specs, with no GP
 
 ## Try it
 
-[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and the text appears, extracted locally — nothing is uploaded.
+**▶ Live demo: <https://alpaq92.github.io/JSDoc/>**
+
+[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and the text appears, extracted locally — nothing is uploaded. Three views: **Formatted** (rebuilds tables), **Plain text**, and **Edit** (editable in place).
 
 - **Locally:** serve the folder (`npx serve`, or `python -m http.server`) and open `index.html`.
-- **On GitHub Pages:** Settings → Pages → deploy from `main` / root, then it's live at `https://alpaq92.github.io/JSDoc/`. The sample in [`samples/`](samples/) is bundled, so the page needs no network at all.
+- **On GitHub Pages:** Settings → Pages → deploy from `main` / root, then it's live at <https://alpaq92.github.io/JSDoc/>. The sample in [`samples/`](samples/) is bundled, so the page needs no network at all.
 
 ## Using it
 
