@@ -1,5 +1,5 @@
 {
-  "name": "doc-to-text",
+  "name": "jsdoc",
   "version": "0.1.0",
   "description": "Pure-JS, browser-runnable text extractor for legacy Word 97-2003 binary .doc files. Clean-room from [MS-CFB]/[MS-DOC]. 0BSD.",
   "license": "0BSD",

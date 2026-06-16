@@ -1,4 +1,4 @@
-# doc-to-text
+# JSDoc
 
 [![CI](https://img.shields.io/github/actions/workflow/status/Alpaq92/JSDoc/ci.yml?branch=main&label=CI)](https://github.com/Alpaq92/JSDoc/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/Alpaq92/JSDoc/ci.yml?branch=main&label=tests)](https://github.com/Alpaq92/JSDoc/actions/workflows/ci.yml)
