@@ -127,6 +127,7 @@
       <button id="copyBtn" type="button">Copy text</button>
       <button id="dlBtn" class="ghost" type="button">Download .txt</button>
       <button id="dlHtmlBtn" class="ghost" type="button">Download .html</button>
+      <button id="dlDocBtn" class="ghost" type="button">Download .doc</button>
     </div>
   </div>
 
@@ -140,8 +141,9 @@
   </footer>
 </div>
 
-<!-- ?v= cache-buster: bump when src/docToText.js changes so browsers refetch it. -->
-<script src="./src/docToText.js?v=3"></script>
+<!-- ?v= cache-buster: bump when the scripts change so browsers refetch them. -->
+<script src="./src/docToText.js?v=4"></script>
+<script src="./src/textToDoc.js?v=1"></script>
 <script>
 (function () {
   "use strict";
@@ -374,6 +376,11 @@
       '<style>body{font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:820px;margin:24px auto;padding:0 16px}' +
       'table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #ccc;padding:6px 9px;text-align:left;vertical-align:top}th{background:#f1f3f5}</style>\n' + body;
     download(lastName + ".html", "text/html;charset=utf-8", doc);
+  });
+  // Write a real binary Word .doc from the current text (textToDoc -> Uint8Array).
+  // v1 saves body text + paragraphs; styling/tables aren't written back yet.
+  document.getElementById("dlDocBtn").addEventListener("click", function () {
+    if (typeof textToDoc === "function") download(lastName + ".doc", "application/msword", textToDoc(currentText()));
   });
 
   if (typeof docToText !== "function") {
