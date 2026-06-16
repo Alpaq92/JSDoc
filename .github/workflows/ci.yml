@@ -26,3 +26,19 @@ jobs:
         run: npm test
       - name: Oracle tests (real .doc vs word-extractor)
         run: npm run test:oracle
+
+  # Single stable check the branch ruleset can require, instead of each brittle
+  # matrix name (test (18) / (20) / (22)). Fails if any matrix job didn't pass.
+  ci-success:
+    name: ci-success
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all matrix jobs passed
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "test matrix result: ${{ needs.test.result }}"
+            exit 1
+          fi
+          echo "all matrix jobs passed"
