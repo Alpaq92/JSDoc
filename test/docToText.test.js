@@ -46,6 +46,17 @@ check('cp1252 smart quotes decoded', got.indexOf('“World”') !== -1);
 // 4. UTF-16-only characters decoded.
 check('UTF-16LE non-Latin decoded', got.indexOf('π') !== -1); // pi
 
+// 5. Sections API: body matches docToText(); all story keys present as strings.
+var sec = docToText.sections(doc.buffer);
+check('docToText.sections returns an object', !!sec && typeof sec === 'object');
+check('sections.body === docToText()', !!sec && sec.body === fixture.EXPECTED);
+check('sections has all 7 story keys (strings)', !!sec &&
+  ['body', 'footnotes', 'headers', 'annotations', 'endnotes', 'textboxes', 'headerTextboxes']
+    .every(function (k) { return typeof sec[k] === 'string'; }));
+check('synthetic doc has no extra stories', !!sec &&
+  sec.footnotes === '' && sec.headers === '' && sec.endnotes === '');
+check('sections(null) -> null', docToText.sections(null) === null);
+
 // --- graceful degradation (must return null, never throw) ---
 function nullCase(name, input) {
   var r;
