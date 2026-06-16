@@ -55,6 +55,21 @@
   .badge.warn { color: var(--warn); background: var(--warn-soft); }
   .meta { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
   .meta strong { color: var(--ink); }
+  .viewtoggle { display: inline-flex; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .viewtoggle button { background: transparent; color: var(--muted); border: 0; border-radius: 0; padding: 6px 13px; font-size: 13px; font-weight: 600; }
+  .viewtoggle button.active { background: var(--accent); color: #fff; }
+  #rich {
+    max-height: 460px; overflow: auto; border: 1px solid var(--line);
+    border-radius: 8px; padding: 16px 18px; background: var(--card);
+  }
+  #rich p { margin: 0 0 10px; }
+  #rich p:last-child { margin-bottom: 0; }
+  table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
+  table.doc-table th, table.doc-table td {
+    border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
+  }
+  table.doc-table th { background: var(--accent-soft); color: var(--ink); font-weight: 700; }
+  table.doc-table tr:nth-child(even) td { background: rgba(127, 127, 127, .045); }
   pre#out {
     margin: 0; max-height: 460px; overflow: auto; white-space: pre-wrap;
     word-break: break-word; font-family: var(--mono); font-size: 13px;
@@ -95,6 +110,11 @@
   <div id="result" class="card hidden">
     <p class="meta" id="meta"></p>
     <div id="fallback" class="fallback hidden"></div>
+    <div class="viewtoggle hidden" id="viewtoggle">
+      <button id="viewRich" class="active" type="button">Formatted</button>
+      <button id="viewText" type="button">Plain text</button>
+    </div>
+    <div id="rich" class="hidden"></div>
     <pre id="out" class="hidden"></pre>
     <div class="row hidden" id="actions">
       <button id="copyBtn" type="button">Copy text</button>
@@ -107,10 +127,13 @@
     <a href="https://github.com/Alpaq92/JSDoc" target="_blank" rel="noopener">github.com/Alpaq92/JSDoc</a>.
     Lossy by design (main-body text + paragraph breaks); returns nothing for Word 6/95,
     encrypted, or non-<code>.doc</code> files, exactly like the host's download fallback.
+    The “Formatted” view rebuilds tables from the extracted tab/newline structure — it is
+    not a pixel-faithful render of the original document.
   </footer>
 </div>
 
-<script src="./src/docToText.js"></script>
+<!-- ?v= cache-buster: bump when src/docToText.js changes so browsers refetch it. -->
+<script src="./src/docToText.js?v=3"></script>
 <script>
 (function () {
   "use strict";
@@ -126,7 +149,11 @@
   var result = document.getElementById("result");
   var meta = document.getElementById("meta");
   var fallback = document.getElementById("fallback");
+  var rich = document.getElementById("rich");
   var out = document.getElementById("out");
+  var viewtoggle = document.getElementById("viewtoggle");
+  var viewRich = document.getElementById("viewRich");
+  var viewText = document.getElementById("viewText");
   var actions = document.getElementById("actions");
   var copyBtn = document.getElementById("copyBtn");
   var dlBtn = document.getElementById("dlBtn");
@@ -140,6 +167,62 @@
     });
   }
 
+  // Rebuild a readable view from the extracted text: consecutive tab-bearing
+  // lines become an HTML table (tabs = columns), everything else a paragraph.
+  function toHtml(text) {
+    var lines = text.split("\n");
+    var html = "", i = 0;
+    while (i < lines.length) {
+      if (lines[i].indexOf("\t") !== -1) {
+        var rows = [];
+        while (i < lines.length && lines[i].indexOf("\t") !== -1) {
+          rows.push(lines[i].split("\t")); i++;
+        }
+        html += '<table class="doc-table"><tbody>';
+        for (var r = 0; r < rows.length; r++) {
+          var tag = r === 0 ? "th" : "td";
+          html += "<tr>";
+          for (var c = 0; c < rows[r].length; c++) {
+            html += "<" + tag + ">" + esc(rows[r][c]) + "</" + tag + ">";
+          }
+          html += "</tr>";
+        }
+        html += "</tbody></table>";
+      } else {
+        if (lines[i].trim() !== "") html += "<p>" + esc(lines[i]) + "</p>";
+        i++;
+      }
+    }
+    return html || "<p><em>(document contains no main-body text)</em></p>";
+  }
+
+  function setView(mode) {
+    var richMode = mode === "rich";
+    rich.classList.toggle("hidden", !richMode);
+    out.classList.toggle("hidden", richMode);
+    viewRich.classList.toggle("active", richMode);
+    viewText.classList.toggle("active", !richMode);
+  }
+  viewRich.addEventListener("click", function () { setView("rich"); });
+  viewText.addEventListener("click", function () { setView("text"); });
+
+  function hideViews() {
+    rich.classList.add("hidden");
+    out.classList.add("hidden");
+    viewtoggle.classList.add("hidden");
+    actions.classList.add("hidden");
+  }
+
+  function warn(name, message) {
+    result.classList.remove("hidden");
+    meta.innerHTML = name
+      ? "<strong>" + esc(name) + "</strong> " + '<span class="badge warn">unsupported</span>'
+      : '<span class="badge warn">offline</span>';
+    fallback.textContent = message;
+    fallback.classList.remove("hidden");
+    hideViews();
+  }
+
   function show(name, buffer) {
     lastName = (name || "document").replace(/\.doc$/i, "");
     result.classList.remove("hidden");
@@ -149,27 +232,21 @@
     catch (e) { text = null; }
 
     if (text === null || text === undefined) {
-      meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
-        '<span class="badge warn">unsupported</span>';
-      fallback.textContent =
-        "Couldn't extract text — this is likely Word 6/95, an encrypted document, " +
-        "or not a binary .doc. In a real app this is where the Download / open-in-Word " +
-        "fallback would appear.";
-      fallback.classList.remove("hidden");
-      out.classList.add("hidden");
-      actions.classList.add("hidden");
+      warn(name, "Couldn't extract text — this is likely Word 6/95, an encrypted " +
+        "document, or not a binary .doc. In a real app this is where the Download / " +
+        "open-in-Word fallback would appear.");
       return;
     }
 
     lastText = text;
-    var chars = text.length;
-    var lines = text ? text.split("\n").length : 0;
     meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
       '<span class="badge ok">extracted</span> &nbsp;' +
-      esc(chars.toLocaleString()) + " chars · " + esc(lines.toLocaleString()) + " lines";
+      esc(text.length.toLocaleString()) + " chars";
     fallback.classList.add("hidden");
+    rich.innerHTML = toHtml(text);
     out.textContent = text.length ? text : "(document contains no main-body text)";
-    out.classList.remove("hidden");
+    viewtoggle.classList.remove("hidden");
+    setView("rich");
     actions.classList.remove("hidden");
   }
 
@@ -197,7 +274,7 @@
     if (e.dataTransfer && e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
   });
 
-  // --- sample (best-effort fetch of an MIT-licensed test .doc) ---
+  // --- sample (bundled MIT-licensed test .doc, with a remote fallback) ---
   function fetchDoc(url) {
     return fetch(url).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -210,23 +287,18 @@
     sampleBtn.textContent = "Loading sample…";
     fetchDoc(SAMPLE_LOCAL)
       .catch(function () { return fetchDoc(SAMPLE_REMOTE); }) // file:// fallback
-      .then(function (buf) {
-        show(SAMPLE_NAME, buf);
-      }).catch(function () {
-        result.classList.remove("hidden");
-        meta.innerHTML = '<span class="badge warn">offline</span>';
-        fallback.textContent = "Couldn't load the sample (no network, or opened via file://). " +
-          "Drop your own .doc above instead.";
-        fallback.classList.remove("hidden");
-        out.classList.add("hidden");
-        actions.classList.add("hidden");
-      }).finally(function () {
+      .then(function (buf) { show(SAMPLE_NAME, buf); })
+      .catch(function () {
+        warn(null, "Couldn't load the sample (no network, or opened via file://). " +
+          "Drop your own .doc above instead.");
+      })
+      .finally(function () {
         sampleBtn.disabled = false;
         sampleBtn.textContent = was;
       });
   });
 
-  // --- copy / download ---
+  // --- copy / download (always the plain extracted text) ---
   copyBtn.addEventListener("click", function () {
     if (navigator.clipboard) navigator.clipboard.writeText(lastText);
   });
@@ -240,11 +312,8 @@
   });
 
   if (typeof docToText !== "function") {
-    result.classList.remove("hidden");
-    meta.innerHTML = '<span class="badge warn">load error</span>';
-    fallback.textContent = "src/docToText.js did not load. If you opened this file directly, " +
-      "serve the folder over http (e.g. `npx serve`) so the script can load.";
-    fallback.classList.remove("hidden");
+    warn(null, "src/docToText.js did not load. If you opened this file directly, " +
+      "serve the folder over http (e.g. `npx serve`) so the script can load.");
   }
 })();
 </script>
