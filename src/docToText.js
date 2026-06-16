@@ -332,6 +332,7 @@
   function extractText(wd, pieces, ccpText) {
     var out = [];
     var fieldStack = []; // per open field: true while inside its instruction
+    var state = { cells: 0 }; // run of pending table cell marks (0x07)
     var consumed = 0;
 
     for (var i = 0; i < pieces.length && consumed < ccpText; i++) {
@@ -345,7 +346,7 @@
         for (var k = 0; k < count; k++) {
           var b = wd[b0 + k];
           if (b === undefined) break;
-          emit(out, fieldStack,
+          emit(out, fieldStack, state,
             b < 0x80 ? b : (b <= 0x9F ? FC_COMPRESSED_MAP[b - 0x80] : b));
         }
       } else {
@@ -353,35 +354,51 @@
         for (var m = 0; m < count; m++) {
           var lo = wd[u0 + m * 2];
           if (lo === undefined) break;
-          emit(out, fieldStack, lo | ((wd[u0 + m * 2 + 1] || 0) << 8));
+          emit(out, fieldStack, state, lo | ((wd[u0 + m * 2 + 1] || 0) << 8));
         }
       }
       consumed += count;
     }
+    flushCells(out, state); // a row mark may be the very last thing in the body
     return out.join('');
   }
 
   // Field markers ([MS-DOC] "Special Characters"): 0x13 begin, 0x14 separator,
-  // 0x15 end.
-  // Text in the instruction region (0x13..0x14) is the field code -> dropped;
-  // text in the result region (0x14..0x15) is kept. Nesting is tracked with a
+  // 0x15 end. Text in the instruction region (0x13..0x14) is the field code ->
+  // dropped; the result region (0x14..0x15) is kept. Nesting is tracked with a
   // stack so a nested field inside an outer instruction is dropped too.
-  function emit(out, fieldStack, code) {
-    if (code === 0x13) { fieldStack.push(true); return; }
-    if (code === 0x14) { if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
-    if (code === 0x15) { if (fieldStack.length) fieldStack.pop(); return; }
+  //
+  // Table cell marks (0x07) are buffered as a run: in the binary format every
+  // cell ends with a 0x07 and the row terminator adds one more, so a single
+  // 0x07 is a column separator (-> tab) while two or more together mark the end
+  // of a table row (-> newline). Empty cells can blur this; a fully accurate
+  // split would need paragraph properties (sprmPFTtp), but this matches Word for
+  // the common case and keeps tables readable instead of one endless line.
+  function emit(out, fieldStack, state, code) {
+    if (code === 0x13) { flushCells(out, state); fieldStack.push(true); return; }
+    if (code === 0x14) { flushCells(out, state); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
+    if (code === 0x15) { flushCells(out, state); if (fieldStack.length) fieldStack.pop(); return; }
     for (var i = 0; i < fieldStack.length; i++) {
       if (fieldStack[i]) return; // inside some field's instruction
     }
+    if (code === 0x07) { state.cells++; return; } // buffer the cell-mark run
+    flushCells(out, state);
     var ch = mapChar(code);
     if (ch !== '') out.push(ch);
+  }
+
+  // Flush a pending run of cell marks: one -> column tab, two or more -> newline.
+  function flushCells(out, state) {
+    if (state.cells === 1) out.push('\t');
+    else if (state.cells >= 2) out.push('\n');
+    state.cells = 0;
   }
 
   // Map a decoded character to output text. Structural control marks become
   // whitespace; special placeholders are dropped.
   function mapChar(code) {
     switch (code) {
-      case 0x07: return '\t';     // cell mark (tables collapse to tabs)
+      // 0x07 (cell mark) is handled as a run in emit()/flushCells(), not here.
       case 0x09: return '\t';     // tab
       case 0x0A: return '\n';     // line feed
       case 0x0B: return '\n';     // manual line break (Shift+Enter)

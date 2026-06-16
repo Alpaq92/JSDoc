@@ -48,7 +48,7 @@ The main body text and its paragraph breaks. Smart quotes and non-Latin scripts 
 
 Not handled yet (and where each would slot in):
 
-- **Tables** flatten to tab/newline text.
+- **Tables** come out as one row per line with tab-separated columns — close to the original grid, though merged or empty cells can nudge the columns.
 - **Headers, footers, and footnotes** are skipped — they live past `ccpText` in the same piece table.
 - **Tracked deletions** stay in (the deleted text is still in the stream; dropping it needs the revision marks).
 - No fonts, images, or styling.
