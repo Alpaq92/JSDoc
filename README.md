@@ -62,6 +62,17 @@ Not handled yet (and where each would slot in):
 - **WMF/EMF images** — only PNG/JPEG are extracted (see `docToText.images`); the common WMF/EMF *metafiles* can't be rendered in-browser without a heavy, non-permissive converter, so they're skipped. Exact inline image *placement* isn't reconstructed either — images come out as a set.
 - **Exact page layout** (line/page-break positions, columns, precise spacing) — that needs a real layout engine, not just property resolution.
 
+## Writing a `.doc`
+
+The reverse direction. **`textToDoc(text)`** ([src/textToDoc.js](src/textToDoc.js)) writes a minimal Word 97–2003 **binary `.doc`** (OLE2 container + FIB + single-piece table) from a string and returns a `Uint8Array` — the inverse of the reader, so `docToText(textToDoc(s)) === s` (plus Word's required trailing paragraph mark). The demo's **Download .doc** button uses it.
+
+```js
+const textToDoc = require('./src/textToDoc.js');
+fs.writeFileSync('out.doc', Buffer.from(textToDoc('Hello\nWorld')));
+```
+
+v1 writes **body text + paragraph breaks** (UTF-16); writing the *styling* back (CHPX/PAPX/STSH) is a follow-on. With no Word in CI, the output is validated by reading it back with **two independent parsers** — our `docToText` *and* the unrelated `word-extractor` — both of which parse it correctly ([test/writer.test.js](test/writer.test.js)).
+
 ## How it works
 
 Two layers, both taken straight from the spec:
