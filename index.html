@@ -67,6 +67,8 @@
   #rich p, #edit p { margin: 0 0 10px; }
   #rich p:last-child, #edit p:last-child { margin-bottom: 0; }
   #rich h3.sec, #edit h3.sec { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .gallery { display: flex; flex-wrap: wrap; gap: 10px; }
+  .gallery img { max-width: 260px; max-height: 220px; border: 1px solid var(--line); border-radius: 6px; background: #fff; object-fit: contain; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -273,11 +275,23 @@
       }
     }
 
+    // Embedded raster images (best-effort PNG/JPEG carving), shown as a gallery.
+    var imgs = docToText.images(buffer) || [];
+    if (imgs.length) {
+      html += '<h3 class="sec">Images (' + imgs.length + ')</h3><div class="gallery">';
+      for (var im = 0; im < imgs.length; im++) {
+        var url = URL.createObjectURL(new Blob([imgs[im].bytes], { type: imgs[im].mime }));
+        html += '<img src="' + url + '" alt="embedded image" loading="lazy">';
+      }
+      html += '</div>';
+    }
+
     lastText = plain;
     meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
       '<span class="badge ok">extracted</span> &nbsp;' +
       esc(doc.body.length.toLocaleString()) + " body chars" +
-      (extras.length ? " · +" + esc(extras.join(", ").toLowerCase()) : "");
+      (extras.length ? " · +" + esc(extras.join(", ").toLowerCase()) : "") +
+      (imgs.length ? " · " + imgs.length + " image" + (imgs.length > 1 ? "s" : "") : "");
     fallback.classList.add("hidden");
     rich.innerHTML = html;
     out.textContent = plain.length ? plain : "(document contains no main-body text)";

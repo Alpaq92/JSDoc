@@ -93,6 +93,76 @@
   // table cells and \n at row/paragraph breaks. Or null on failure.
   docToText.html = function (input) { var doc = parse(input); return doc ? doc.html : null; };
 
+  // docToText.images(input) -> [{ mime, bytes }] for embedded raster images
+  // (PNG/JPEG), best effort. Word stores pictures/OLE images as raw image bytes
+  // somewhere in the CFB streams; we carve complete images by signature from the
+  // reassembled streams (CFB sector fragmentation already handled), validating
+  // each by parsing to its real end marker. WMF/EMF metafiles aren't raster and
+  // can't render in-browser, so they're skipped; exact inline placement isn't
+  // reconstructed. Returns null on failure (not a CFB).
+  docToText.images = function (input) {
+    try { var cfb = parseCfb(toUint8(input)); return cfb ? carveImages(cfb) : null; }
+    catch (e) { return null; }
+  };
+
+  function matchSig(b, i, sig) {
+    if (i + sig.length > b.length) return false;
+    for (var k = 0; k < sig.length; k++) if (b[i + k] !== sig[k]) return false;
+    return true;
+  }
+  // End of a PNG: walk chunks (length+type+data+crc) to IEND. -1 if malformed.
+  function pngEnd(b, start) {
+    var p = start + 8;
+    while (p + 12 <= b.length) {
+      var len = b[p] * 0x1000000 + (b[p + 1] << 16) + (b[p + 2] << 8) + b[p + 3];
+      var type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+      p += 12 + len;
+      if (type === 'IEND') return p <= b.length ? p : -1;
+      if (len < 0 || p > b.length) return -1;
+    }
+    return -1;
+  }
+  // End of a JPEG: parse markers/segments to EOI (FF D9). -1 if malformed.
+  function jpegEnd(b, start) {
+    var p = start + 2;
+    while (p + 1 < b.length) {
+      if (b[p] !== 0xFF) { p++; continue; }
+      var m = b[p + 1];
+      if (m === 0xD9) return p + 2;                                  // EOI
+      if (m === 0x01 || m === 0xFF || (m >= 0xD0 && m <= 0xD8)) { p += 2; continue; }
+      if (p + 3 >= b.length) return -1;
+      p += 2 + ((b[p + 2] << 8) | b[p + 3]);                         // skip segment
+      if (m === 0xDA) {                                              // SOS -> scan entropy data
+        while (p + 1 < b.length && !(b[p] === 0xFF && b[p + 1] !== 0x00 && !(b[p + 1] >= 0xD0 && b[p + 1] <= 0xD7))) p++;
+      }
+    }
+    return -1;
+  }
+  function carveImages(cfb) {
+    var SIGS = [
+      { mime: 'image/png', sig: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], end: pngEnd },
+      { mime: 'image/jpeg', sig: [0xff, 0xd8, 0xff], end: jpegEnd }
+    ];
+    var images = [], seen = {};
+    for (var name in cfb.byName) {
+      var b = cfb.getStream(cfb.byName[name]);
+      for (var i = 0; i + 3 < b.length; i++) {
+        for (var s = 0; s < SIGS.length; s++) {
+          if (matchSig(b, i, SIGS[s].sig)) {
+            var end = SIGS[s].end(b, i);
+            if (end > i + 32) {                          // a real image, not a stray signature
+              var key = SIGS[s].mime + ':' + (end - i);
+              if (!seen[key]) { seen[key] = 1; images.push({ mime: SIGS[s].mime, bytes: b.subarray(i, end) }); }
+              i = end - 1;
+            }
+            break;
+          }
+        }
+      }
+    }
+    return images;
+  }
+
   // ------------------------------------------------------------------------
   // Layer 1 — [MS-CFB] OLE2 container
   // ------------------------------------------------------------------------
