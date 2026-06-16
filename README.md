@@ -50,10 +50,11 @@ The main body text and its paragraph breaks. Smart quotes and non-Latin scripts 
 
 `docToText.sections(input)` returns the document's separate stories — `{ body, footnotes, headers, annotations, endnotes, textboxes, headerTextboxes }` (each a string) — so **headers, footers, footnotes, endnotes, comments, and text boxes** come through too; they sit right after the body in the same piece table. `body` is exactly what `docToText()` returns, and the demo shows the rest as labeled sections.
 
+**Tracked changes are resolved as "accept all":** deleted text is dropped (identified by the `sprmCFRMarkDel` revision mark in the CHPX bin table) and inserted text is kept.
+
 Not handled yet (and where each would slot in):
 
 - **Tables** come out as one row per line with tab-separated columns — close to the original grid, though merged or empty cells can nudge the columns.
-- **Tracked deletions** still come through (the deleted text is in the stream; dropping it needs the character-level revision marks) — *coming next.*
 - No fonts, images, or styling — *coming next.*
 
 ## How it works

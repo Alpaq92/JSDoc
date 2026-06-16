@@ -27,9 +27,9 @@
  * text and paragraph breaks. No fonts, images, or styles. Tables collapse to
  * tab/newline text. Headers, footers, footnotes (and endnotes, comments,
  * textboxes) are available as separate stories via docToText.sections().
- * Tracked-change *deletions* are kept (the deleted text is still in the main CP
- * range); dropping them would require parsing character-level revision marks
- * (sprmCFRMarkDel via the CHPX bin table) — a documented v2 extension.
+ * Tracked-change *deletions* are dropped (their text is identified via the
+ * sprmCFRMarkDel revision mark in the CHPX bin table); tracked *insertions* are
+ * kept, so the output reflects the document with all changes accepted.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -285,11 +285,14 @@
     var pieces = parsePieceTable(tableBytes, fcClx, lcbClx);
     if (!pieces) return null;
 
+    // Tracked-change deletions are dropped from every story.
+    var isDeleted = makeIsDeleted(parseDeletedRanges(wd, tableBytes, fibRgFcLcbStart, dv));
+
     // The body is [0, ccpText); each subsequent story is the next CP range.
     var cp = ccpText;
-    function story(len) { var s = extractRange(wd, pieces, cp, cp + len); cp += len; return s; }
+    function story(len) { var s = extractRange(wd, pieces, cp, cp + len, isDeleted); cp += len; return s; }
     return {
-      body: extractRange(wd, pieces, 0, ccpText),
+      body: extractRange(wd, pieces, 0, ccpText, isDeleted),
       footnotes: story(ccpFtn),
       headers: story(ccpHdd),
       annotations: story(ccpAtn),
@@ -350,11 +353,112 @@
     return pieces;
   }
 
+  // ---- tracked-change deletions ([MS-DOC] CHPX bin table) -----------------
+  // The character formatting of every run lives in CHPX FKP "pages" indexed by
+  // PlcfBteChpx. A run marked with sprmCFRMarkDel (0x0801 = 1) is tracked-change
+  // deleted text; we collect those runs' WordDocument byte ranges so extraction
+  // can drop them. FibRgFcLcb97 #12 = fcPlcfBteChpx/lcbPlcfBteChpx (table stream).
+  function parseDeletedRanges(wd, table, fibRgFcLcbStart, fibDv) {
+    try {
+      var pair = fibRgFcLcbStart + 12 * 8;
+      if (pair + 8 > wd.length) return null;
+      var fc = fibDv.getUint32(pair, true);
+      var lcb = fibDv.getUint32(pair + 4, true);
+      if (lcb < 4 || fc < 0 || fc + lcb > table.length) return null;
+      var tdv = new DataView(table.buffer, table.byteOffset, table.byteLength);
+      var n = Math.floor((lcb - 4) / 8);          // PlcfBteChpx: n+1 FCs + n PNs
+      if (n < 1) return null;
+      var pnBase = fc + (n + 1) * 4;
+      var ranges = [];
+      for (var i = 0; i < n; i++) {
+        var pn = tdv.getUint32(pnBase + i * 4, true) & 0x003FFFFF; // PnFkpChpx.pn
+        collectFkpDeletions(wd, pn * 512, ranges);
+      }
+      if (!ranges.length) return [];
+      ranges.sort(function (a, b) { return a[0] - b[0]; });
+      var merged = [ranges[0]];
+      for (var j = 1; j < ranges.length; j++) {
+        var last = merged[merged.length - 1];
+        if (ranges[j][0] <= last[1]) { if (ranges[j][1] > last[1]) last[1] = ranges[j][1]; }
+        else merged.push(ranges[j]);
+      }
+      return merged;
+    } catch (e) { return null; }
+  }
+
+  // One ChpxFkp page (512 bytes at pn*512): crun at byte 511, rgfc[crun+1],
+  // then rgb[crun] (word offsets to each Chpx; 0 = default props).
+  function collectFkpDeletions(wd, pageOff, ranges) {
+    if (pageOff < 0 || pageOff + 512 > wd.length) return;
+    var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
+    var crun = wd[pageOff + 511];
+    if (!crun) return;
+    var rgbBase = pageOff + 4 * (crun + 1);
+    for (var i = 0; i < crun; i++) {
+      var word = wd[rgbBase + i];
+      if (!word) continue;                          // default formatting
+      var chpxOff = pageOff + word * 2;             // Chpx: cb, then grpprl
+      if (chpxOff < pageOff || chpxOff >= pageOff + 512) continue;
+      var cb = wd[chpxOff];
+      if (chpxOff + 1 + cb > pageOff + 512) continue;
+      if (grpprlHasDelete(wd, chpxOff + 1, cb)) {
+        var s = dv.getUint32(pageOff + i * 4, true);
+        var e = dv.getUint32(pageOff + (i + 1) * 4, true);
+        if (e > s) ranges.push([s, e]);
+      }
+    }
+  }
+
+  // Scan a grpprl for sprmCFRMarkDel (0x0800 = the deletion revision mark;
+  // 0x0801 is sprmCFRMark, an *insertion*, which we keep). Its operand is a
+  // ToggleOperand: 0x01 = on, 0x81 = invert the (off) style default = on — both
+  // mean deleted, so the property is "on" exactly when bit 0 is set.
+  function grpprlHasDelete(wd, off, len) {
+    var p = off, end = off + len;
+    while (p + 2 <= end) {
+      var sprm = wd[p] | (wd[p + 1] << 8);
+      p += 2;
+      if (sprm === 0x0800) return (wd[p] & 1) === 1;
+      p += sprmOperandLen(sprm, wd, p);
+    }
+    return false;
+  }
+
+  // Operand size from the sprm's spra field (bits 13-15). spra 6 is variable:
+  // a 1-byte length precedes the operand (table sprms with 2-byte lengths don't
+  // occur in CHPX grpprls).
+  function sprmOperandLen(sprm, buf, pos) {
+    switch ((sprm >> 13) & 7) {
+      case 0: case 1: return 1;
+      case 2: case 4: case 5: return 2;
+      case 3: return 4;
+      case 7: return 3;
+      case 6: return 1 + (buf[pos] || 0);
+      default: return 1;
+    }
+  }
+
+  // Binary-search predicate over sorted, merged deleted [start, end) ranges.
+  function makeIsDeleted(ranges) {
+    if (!ranges || !ranges.length) return null;
+    return function (fc) {
+      var lo = 0, hi = ranges.length - 1;
+      while (lo <= hi) {
+        var mid = (lo + hi) >> 1;
+        if (fc < ranges[mid][0]) hi = mid - 1;
+        else if (fc >= ranges[mid][1]) lo = mid + 1;
+        else return true;
+      }
+      return false;
+    };
+  }
+
   // Extract the text of one CP range [lo, hi): the body uses [0, ccpText) and
   // each trailing story (footnotes, headers, ...) its own range. Pieces are in
   // CP order (PlcPcd aCP is sorted), so we take each piece's overlap with the
-  // range. Decodes, strips field codes and control marks.
-  function extractRange(wd, pieces, lo, hi) {
+  // range. Decodes, strips field codes/control marks, and drops any chars whose
+  // WordDocument offset is in a tracked-deletion range (isDeleted).
+  function extractRange(wd, pieces, lo, hi, isDeleted) {
     if (hi <= lo) return '';
     var out = [];
     var fieldStack = []; // per open field: true while inside its instruction
@@ -371,6 +475,7 @@
       if (pc.compressed) {
         var base = pc.offset + start;
         for (var k = 0; k < count; k++) {
+          if (isDeleted && isDeleted(base + k)) continue; // tracked-change deletion
           var byte = wd[base + k];
           if (byte === undefined) break;
           emit(out, fieldStack, state,
@@ -379,6 +484,7 @@
       } else {
         var u = pc.offset + start * 2;
         for (var m = 0; m < count; m++) {
+          if (isDeleted && isDeleted(u + m * 2)) continue; // tracked-change deletion
           var loB = wd[u + m * 2];
           if (loB === undefined) break;
           emit(out, fieldStack, state, loB | ((wd[u + m * 2 + 1] || 0) << 8));
