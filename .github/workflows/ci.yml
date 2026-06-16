@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Syntax check
+        run: node --check src/docToText.js
+      - name: Install dev deps (test oracle)
+        run: npm install --no-audit --no-fund
+      - name: Unit tests (offline)
+        run: npm test
+      - name: Oracle tests (real .doc vs word-extractor)
+        run: npm run test:oracle

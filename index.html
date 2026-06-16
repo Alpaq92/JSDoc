@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: 0BSD -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>doc-to-text — legacy Word .doc text extractor (in-browser)</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1c2230; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2b6cb0; --accent-soft: #e8f0fb;
+    --ok: #1a7f43; --ok-soft: #e6f4ec; --warn: #9a5b00; --warn-soft: #fbf0dd;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --card: #1c2026; --ink: #e6e9ee; --muted: #9aa3af;
+      --line: #2b3038; --accent: #5b9bd5; --accent-soft: #1d2937;
+      --ok: #56c285; --ok-soft: #14241a; --warn: #d9a25a; --warn-soft: #2a2113;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .sub a { color: var(--accent); }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px; margin-bottom: 18px;
+  }
+  #drop {
+    border: 2px dashed var(--line); border-radius: 12px; padding: 38px 20px;
+    text-align: center; cursor: pointer; transition: .15s; background: var(--card);
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  #drop .big { font-size: 17px; font-weight: 600; }
+  #drop .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+  button {
+    font: inherit; font-weight: 600; color: #fff; background: var(--accent);
+    border: 0; border-radius: 8px; padding: 9px 14px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .privacy { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+  .badge {
+    display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 9px;
+    border-radius: 999px; vertical-align: middle;
+  }
+  .badge.ok { color: var(--ok); background: var(--ok-soft); }
+  .badge.warn { color: var(--warn); background: var(--warn-soft); }
+  .meta { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .meta strong { color: var(--ink); }
+  pre#out {
+    margin: 0; max-height: 460px; overflow: auto; white-space: pre-wrap;
+    word-break: break-word; font-family: var(--mono); font-size: 13px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px;
+  }
+  .fallback { padding: 16px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); }
+  .hidden { display: none; }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 26px; }
+  footer a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .9em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>doc-to-text</h1>
+  <p class="sub">
+    Extracts text from legacy Microsoft Word <strong>97–2003 binary <code>.doc</code></strong>
+    files — entirely in your browser. Pure JavaScript, zero dependencies, clean-room from
+    the <a href="https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/ccd7b486-7881-484c-a137-51170af7cc22" target="_blank" rel="noopener">[MS-DOC]</a>
+    /
+    <a href="https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/53989ce4-7b05-4f8d-829b-d08d6148375b" target="_blank" rel="noopener">[MS-CFB]</a>
+    specs, <code>0BSD</code>.
+  </p>
+
+  <div class="card">
+    <div id="drop" tabindex="0" role="button" aria-label="Choose or drop a .doc file">
+      <div class="big">Drop a <code>.doc</code> here, or click to browse</div>
+      <div class="hint">Nothing is uploaded — extraction runs locally on this page.</div>
+    </div>
+    <input id="file" type="file" accept=".doc,application/msword" class="hidden">
+    <div class="row">
+      <button id="sampleBtn" class="ghost" type="button">Try a sample .doc</button>
+      <span class="privacy">100% client-side · no network</span>
+    </div>
+  </div>
+
+  <div id="result" class="card hidden">
+    <p class="meta" id="meta"></p>
+    <div id="fallback" class="fallback hidden"></div>
+    <pre id="out" class="hidden"></pre>
+    <div class="row hidden" id="actions">
+      <button id="copyBtn" type="button">Copy text</button>
+      <button id="dlBtn" class="ghost" type="button">Download .txt</button>
+    </div>
+  </div>
+
+  <footer>
+    Source &amp; tests:
+    <a href="https://github.com/Alpaq92/JSDoc" target="_blank" rel="noopener">github.com/Alpaq92/JSDoc</a>.
+    Lossy by design (main-body text + paragraph breaks); returns nothing for Word 6/95,
+    encrypted, or non-<code>.doc</code> files, exactly like the host's download fallback.
+  </footer>
+</div>
+
+<script src="./src/docToText.js"></script>
+<script>
+(function () {
+  "use strict";
+  // Bundled sample (works offline on GitHub Pages); remote copy is a fallback
+  // for when the page is opened via file:// where local fetch is blocked.
+  var SAMPLE_LOCAL = "./samples/license-comparison.doc";
+  var SAMPLE_REMOTE = "https://raw.githubusercontent.com/morungos/node-word-extractor/develop/__tests__/data/test03.doc";
+  var SAMPLE_NAME = "license-comparison.doc (sample)";
+
+  var drop = document.getElementById("drop");
+  var fileInput = document.getElementById("file");
+  var sampleBtn = document.getElementById("sampleBtn");
+  var result = document.getElementById("result");
+  var meta = document.getElementById("meta");
+  var fallback = document.getElementById("fallback");
+  var out = document.getElementById("out");
+  var actions = document.getElementById("actions");
+  var copyBtn = document.getElementById("copyBtn");
+  var dlBtn = document.getElementById("dlBtn");
+
+  var lastText = "";
+  var lastName = "document";
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function show(name, buffer) {
+    lastName = (name || "document").replace(/\.doc$/i, "");
+    result.classList.remove("hidden");
+
+    var text;
+    try { text = docToText(buffer); }
+    catch (e) { text = null; }
+
+    if (text === null || text === undefined) {
+      meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
+        '<span class="badge warn">unsupported</span>';
+      fallback.textContent =
+        "Couldn't extract text — this is likely Word 6/95, an encrypted document, " +
+        "or not a binary .doc. In a real app this is where the Download / open-in-Word " +
+        "fallback would appear.";
+      fallback.classList.remove("hidden");
+      out.classList.add("hidden");
+      actions.classList.add("hidden");
+      return;
+    }
+
+    lastText = text;
+    var chars = text.length;
+    var lines = text ? text.split("\n").length : 0;
+    meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
+      '<span class="badge ok">extracted</span> &nbsp;' +
+      esc(chars.toLocaleString()) + " chars · " + esc(lines.toLocaleString()) + " lines";
+    fallback.classList.add("hidden");
+    out.textContent = text.length ? text : "(document contains no main-body text)";
+    out.classList.remove("hidden");
+    actions.classList.remove("hidden");
+  }
+
+  function readFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () { show(file.name, reader.result); };
+    reader.onerror = function () { show(file.name, null); };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // --- drag & drop + click to browse ---
+  drop.addEventListener("click", function () { fileInput.click(); });
+  drop.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener("change", function () { readFile(fileInput.files[0]); });
+  ["dragenter", "dragover"].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); });
+  });
+  drop.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+  });
+
+  // --- sample (best-effort fetch of an MIT-licensed test .doc) ---
+  function fetchDoc(url) {
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.arrayBuffer();
+    });
+  }
+  sampleBtn.addEventListener("click", function () {
+    sampleBtn.disabled = true;
+    var was = sampleBtn.textContent;
+    sampleBtn.textContent = "Loading sample…";
+    fetchDoc(SAMPLE_LOCAL)
+      .catch(function () { return fetchDoc(SAMPLE_REMOTE); }) // file:// fallback
+      .then(function (buf) {
+        show(SAMPLE_NAME, buf);
+      }).catch(function () {
+        result.classList.remove("hidden");
+        meta.innerHTML = '<span class="badge warn">offline</span>';
+        fallback.textContent = "Couldn't load the sample (no network, or opened via file://). " +
+          "Drop your own .doc above instead.";
+        fallback.classList.remove("hidden");
+        out.classList.add("hidden");
+        actions.classList.add("hidden");
+      }).finally(function () {
+        sampleBtn.disabled = false;
+        sampleBtn.textContent = was;
+      });
+  });
+
+  // --- copy / download ---
+  copyBtn.addEventListener("click", function () {
+    if (navigator.clipboard) navigator.clipboard.writeText(lastText);
+  });
+  dlBtn.addEventListener("click", function () {
+    var blob = new Blob([lastText], { type: "text/plain;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = lastName + ".txt";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+
+  if (typeof docToText !== "function") {
+    result.classList.remove("hidden");
+    meta.innerHTML = '<span class="badge warn">load error</span>';
+    fallback.textContent = "src/docToText.js did not load. If you opened this file directly, " +
+      "serve the folder over http (e.g. `npx serve`) so the script can load.";
+    fallback.classList.remove("hidden");
+  }
+})();
+</script>
+</body>
+</html>

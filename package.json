@@ -1,0 +1,17 @@
+{
+  "name": "doc-to-text",
+  "version": "0.1.0",
+  "description": "Pure-JS, browser-runnable text extractor for legacy Word 97-2003 binary .doc files. Clean-room from [MS-CFB]/[MS-DOC]. 0BSD.",
+  "license": "0BSD",
+  "main": "src/docToText.js",
+  "browser": "src/docToText.js",
+  "files": ["src/docToText.js", "LICENSE"],
+  "scripts": {
+    "test": "node test/docToText.test.js",
+    "test:oracle": "node test/oracle.test.js"
+  },
+  "keywords": ["doc", "word", "ole2", "cfb", "ms-doc", "text", "extract", "browser"],
+  "devDependencies": {
+    "word-extractor": "^1.0.4"
+  }
+}
