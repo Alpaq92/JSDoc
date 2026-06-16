@@ -58,12 +58,14 @@
   .viewtoggle { display: inline-flex; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .viewtoggle button { background: transparent; color: var(--muted); border: 0; border-radius: 0; padding: 6px 13px; font-size: 13px; font-weight: 600; }
   .viewtoggle button.active { background: var(--accent); color: #fff; }
-  #rich {
+  #rich, #edit {
     max-height: 460px; overflow: auto; border: 1px solid var(--line);
     border-radius: 8px; padding: 16px 18px; background: var(--card);
   }
-  #rich p { margin: 0 0 10px; }
-  #rich p:last-child { margin-bottom: 0; }
+  #edit { outline: none; }
+  #edit:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  #rich p, #edit p { margin: 0 0 10px; }
+  #rich p:last-child, #edit p:last-child { margin-bottom: 0; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -113,12 +115,15 @@
     <div class="viewtoggle hidden" id="viewtoggle">
       <button id="viewRich" class="active" type="button">Formatted</button>
       <button id="viewText" type="button">Plain text</button>
+      <button id="viewEdit" type="button">Edit</button>
     </div>
     <div id="rich" class="hidden"></div>
     <pre id="out" class="hidden"></pre>
+    <div id="edit" class="hidden" contenteditable="true" spellcheck="false"></div>
     <div class="row hidden" id="actions">
       <button id="copyBtn" type="button">Copy text</button>
       <button id="dlBtn" class="ghost" type="button">Download .txt</button>
+      <button id="dlHtmlBtn" class="ghost" type="button">Download .html</button>
     </div>
   </div>
 
@@ -154,12 +159,16 @@
   var viewtoggle = document.getElementById("viewtoggle");
   var viewRich = document.getElementById("viewRich");
   var viewText = document.getElementById("viewText");
+  var viewEdit = document.getElementById("viewEdit");
+  var edit = document.getElementById("edit");
   var actions = document.getElementById("actions");
   var copyBtn = document.getElementById("copyBtn");
   var dlBtn = document.getElementById("dlBtn");
+  var dlHtmlBtn = document.getElementById("dlHtmlBtn");
 
   var lastText = "";
   var lastName = "document";
+  var editReady = false; // becomes true once the Edit view has been populated for the current doc
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
@@ -197,18 +206,25 @@
   }
 
   function setView(mode) {
-    var richMode = mode === "rich";
-    rich.classList.toggle("hidden", !richMode);
-    out.classList.toggle("hidden", richMode);
-    viewRich.classList.toggle("active", richMode);
-    viewText.classList.toggle("active", !richMode);
+    // Lazily seed the editable view from the formatted HTML the first time it's opened,
+    // so edits aren't wiped when toggling between views.
+    if (mode === "edit" && !editReady) { edit.innerHTML = rich.innerHTML; editReady = true; }
+    rich.classList.toggle("hidden", mode !== "rich");
+    out.classList.toggle("hidden", mode !== "text");
+    edit.classList.toggle("hidden", mode !== "edit");
+    viewRich.classList.toggle("active", mode === "rich");
+    viewText.classList.toggle("active", mode === "text");
+    viewEdit.classList.toggle("active", mode === "edit");
+    if (mode === "edit") edit.focus();
   }
   viewRich.addEventListener("click", function () { setView("rich"); });
   viewText.addEventListener("click", function () { setView("text"); });
+  viewEdit.addEventListener("click", function () { setView("edit"); });
 
   function hideViews() {
     rich.classList.add("hidden");
     out.classList.add("hidden");
+    edit.classList.add("hidden");
     viewtoggle.classList.add("hidden");
     actions.classList.add("hidden");
   }
@@ -245,6 +261,7 @@
     fallback.classList.add("hidden");
     rich.innerHTML = toHtml(text);
     out.textContent = text.length ? text : "(document contains no main-body text)";
+    editReady = false; edit.innerHTML = ""; // fresh edit buffer per document
     viewtoggle.classList.remove("hidden");
     setView("rich");
     actions.classList.remove("hidden");
@@ -298,17 +315,31 @@
       });
   });
 
-  // --- copy / download (always the plain extracted text) ---
-  copyBtn.addEventListener("click", function () {
-    if (navigator.clipboard) navigator.clipboard.writeText(lastText);
-  });
-  dlBtn.addEventListener("click", function () {
-    var blob = new Blob([lastText], { type: "text/plain;charset=utf-8" });
+  // --- copy / download: reflect Edit-view changes once they've been made ---
+  function currentText() { return editReady ? edit.innerText : lastText; }
+
+  function download(filename, mime, content) {
+    var blob = new Blob([content], { type: mime });
     var a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = lastName + ".txt";
+    a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  copyBtn.addEventListener("click", function () {
+    if (navigator.clipboard) navigator.clipboard.writeText(currentText());
+  });
+  dlBtn.addEventListener("click", function () {
+    download(lastName + ".txt", "text/plain;charset=utf-8", currentText());
+  });
+  // Self-contained HTML of the formatted (or edited) document, table styles inlined.
+  dlHtmlBtn.addEventListener("click", function () {
+    var body = editReady ? edit.innerHTML : rich.innerHTML;
+    var doc = '<!doctype html><meta charset="utf-8"><title>' + esc(lastName) + '</title>' +
+      '<style>body{font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:820px;margin:24px auto;padding:0 16px}' +
+      'table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #ccc;padding:6px 9px;text-align:left;vertical-align:top}th{background:#f1f3f5}</style>\n' + body;
+    download(lastName + ".html", "text/html;charset=utf-8", doc);
   });
 
   if (typeof docToText !== "function") {
