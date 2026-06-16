@@ -46,16 +46,19 @@ const text = docToText(require('fs').readFileSync('file.doc'));
 
 ## What you get
 
-The main body text and its paragraph breaks. Smart quotes and non-Latin scripts come through correctly, and field codes are stripped — you keep the result (say, the page number) and lose the `PAGE` instruction behind it. It's deliberately lossy: a text view, the way an `.rtf` looks in a plain reader.
+The main body text and its paragraph breaks. Smart quotes and non-Latin scripts come through correctly, and field codes are stripped — you keep the result (say, the page number) and lose the `PAGE` instruction behind it.
 
-`docToText.sections(input)` returns the document's separate stories — `{ body, footnotes, headers, annotations, endnotes, textboxes, headerTextboxes }` (each a string) — so **headers, footers, footnotes, endnotes, comments, and text boxes** come through too; they sit right after the body in the same piece table. `body` is exactly what `docToText()` returns, and the demo shows the rest as labeled sections.
+`docToText.sections(input)` returns the document's separate stories — `{ body, footnotes, headers, annotations, endnotes, textboxes, headerTextboxes }` (each a string) — so **headers, footers, footnotes, endnotes, comments, and text boxes** come through too; they sit right after the body in the same piece table. `body` is exactly what `docToText()` returns.
 
-**Tracked changes are resolved as "accept all":** deleted text is dropped (identified by the `sprmCFRMarkDel` revision mark in the CHPX bin table) and inserted text is kept.
+`docToText.html(input)` returns those same stories as **styled HTML** — each run wrapped in a `<span>` carrying its **bold / italic / underline / strikethrough, size, colour, and font** — with `\t` between table cells and `\n` at row/paragraph breaks. Formatting is fully resolved through the stylesheet (paragraph style → character style → direct run properties), so formatting that lives in a *style* — a heading's bold, a hyperlink's blue/underline — isn't lost, not just directly-applied sprms. The demo renders this as the Formatted view.
+
+**Tracked changes are resolved as "accept all":** deleted text is dropped (the `sprmCFRMarkDel` revision mark in the CHPX bin table) and inserted text kept.
 
 Not handled yet (and where each would slot in):
 
 - **Tables** come out as one row per line with tab-separated columns — close to the original grid, though merged or empty cells can nudge the columns.
-- No fonts, images, or styling — *coming next.*
+- **Images** — pictures are a `0x01` char whose CHPX points into the Data stream (`sprmCPicLocation`); embedded PNG/JPEG could be pulled out, but the common WMF/EMF metafiles can't be rendered in-browser without a heavy, non-permissive converter.
+- **Exact page layout** (line/page-break positions, columns, precise spacing) — that needs a real layout engine, not just property resolution.
 
 ## How it works
 

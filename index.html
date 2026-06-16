@@ -177,11 +177,12 @@
     });
   }
 
-  // Rebuild a readable view from the extracted text: consecutive tab-bearing
+  // Build a readable view from a \t/\n-delimited string: consecutive tab-bearing
   // lines become an HTML table (tabs = columns), everything else a paragraph.
-  function toHtml(text) {
-    var lines = text.split("\n");
-    var html = "", i = 0;
+  // When `raw` is true the segments are already HTML (styled spans) and are not
+  // escaped; otherwise they're plain text and get escaped.
+  function toHtml(text, raw) {
+    var lines = text.split("\n"), html = "", i = 0;
     while (i < lines.length) {
       if (lines[i].indexOf("\t") !== -1) {
         var rows = [];
@@ -193,13 +194,13 @@
           var tag = r === 0 ? "th" : "td";
           html += "<tr>";
           for (var c = 0; c < rows[r].length; c++) {
-            html += "<" + tag + ">" + esc(rows[r][c]) + "</" + tag + ">";
+            html += "<" + tag + ">" + (raw ? rows[r][c] : esc(rows[r][c])) + "</" + tag + ">";
           }
           html += "</tr>";
         }
         html += "</tbody></table>";
       } else {
-        if (lines[i].trim() !== "") html += "<p>" + esc(lines[i]) + "</p>";
+        if (lines[i].trim() !== "") html += "<p>" + (raw ? lines[i] : esc(lines[i])) + "</p>";
         i++;
       }
     }
@@ -261,13 +262,14 @@
       ["headers", "Headers & footers"], ["annotations", "Comments"],
       ["textboxes", "Text boxes"], ["headerTextboxes", "Header text boxes"]
     ];
-    var plain = doc.body, html = toHtml(doc.body), extras = [];
+    // Formatted view uses the styled HTML (doc.html.*); plain text uses doc.*.
+    var plain = doc.body, html = toHtml(doc.html.body, true), extras = [];
     for (var s = 0; s < STORIES.length; s++) {
-      var v = doc[STORIES[s][0]];
+      var key = STORIES[s][0], v = doc[key];
       if (v && v.replace(/\s+/g, "")) {
         extras.push(STORIES[s][1]);
         plain += "\n\n" + STORIES[s][1] + ":\n" + v;
-        html += '<h3 class="sec">' + esc(STORIES[s][1]) + "</h3>" + toHtml(v);
+        html += '<h3 class="sec">' + esc(STORIES[s][1]) + "</h3>" + toHtml(doc.html[key], true);
       }
     }
 

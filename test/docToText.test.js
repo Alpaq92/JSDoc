@@ -57,6 +57,13 @@ check('synthetic doc has no extra stories', !!sec &&
   sec.footnotes === '' && sec.headers === '' && sec.endnotes === '');
 check('sections(null) -> null', docToText.sections(null) === null);
 
+// 6. html() output: styled-HTML stories (each a string), body carries the text.
+var htmlOut = docToText.html(doc.buffer);
+check('docToText.html returns an object', !!htmlOut && typeof htmlOut === 'object');
+check('html.body is a string containing the body text',
+  !!htmlOut && typeof htmlOut.body === 'string' && htmlOut.body.indexOf('World') !== -1);
+check('html(null) -> null', docToText.html(null) === null);
+
 // --- graceful degradation (must return null, never throw) ---
 function nullCase(name, input) {
   var r;

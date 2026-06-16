@@ -84,7 +84,14 @@
   // endnotes, textboxes, headerTextboxes } (each a string; "" when empty), or
   // null. These are the document's separate text stories, which follow the
   // main body consecutively in the same piece table. `body` === docToText().
+  // The object also carries `.html` (see below).
   docToText.sections = parse;
+
+  // docToText.html(input) -> { body, footnotes, ... } where each is styled HTML
+  // for that story: text runs wrapped in <span> with the run's character
+  // formatting (bold/italic/underline/strike/size/color/font), with \t between
+  // table cells and \n at row/paragraph breaks. Or null on failure.
+  docToText.html = function (input) { var doc = parse(input); return doc ? doc.html : null; };
 
   // ------------------------------------------------------------------------
   // Layer 1 — [MS-CFB] OLE2 container
@@ -285,21 +292,39 @@
     var pieces = parsePieceTable(tableBytes, fcClx, lcbClx);
     if (!pieces) return null;
 
-    // Tracked-change deletions are dropped from every story.
-    var isDeleted = makeIsDeleted(parseDeletedRanges(wd, tableBytes, fibRgFcLcbStart, dv));
+    // Character runs (formatting + tracked-deletion flag). Deletions are
+    // dropped from every story; the formatting feeds the styled HTML output.
+    var chpx = parseChpx(wd, tableBytes, fibRgFcLcbStart, dv);
+    var isDeleted = makeIsDeleted(chpx);
+    var fonts = parseFonts(tableBytes, fibRgFcLcbStart, dv);
+    var styles = parseStsh(tableBytes, fibRgFcLcbStart, dv);
+    var papx = parsePapx(wd, tableBytes, fibRgFcLcbStart, dv);
+    // resolve(fc): the fully-resolved character props at a WordDocument offset,
+    // layered lowest-to-highest priority ([MS-DOC] 2.4.6.2): paragraph style ->
+    // character style (sprmCIstd) -> direct run props -> font name.
+    var resolve = chpx ? function (fc) {
+      var out = {}, k, s;
+      if (styles && papx) { var pr = runAt(papx, fc); if (pr && styles[pr.istd]) { s = styles[pr.istd]; for (k in s) out[k] = s[k]; } }
+      var r = runAt(chpx, fc), p = r ? r.p : {};
+      if (styles && p.istd != null && styles[p.istd]) { s = styles[p.istd]; for (k in s) out[k] = s[k]; }
+      for (k in p) if (k !== 'istd') out[k] = p[k];     // direct run props win
+      if (fonts && out.ftc != null && fonts[out.ftc]) out.font = fonts[out.ftc];
+      return out;
+    } : null;
 
-    // The body is [0, ccpText); each subsequent story is the next CP range.
-    var cp = ccpText;
-    function story(len) { var s = extractRange(wd, pieces, cp, cp + len, isDeleted); cp += len; return s; }
-    return {
-      body: extractRange(wd, pieces, 0, ccpText, isDeleted),
-      footnotes: story(ccpFtn),
-      headers: story(ccpHdd),
-      annotations: story(ccpAtn),
-      endnotes: story(ccpEdn),
-      textboxes: story(ccpTxbx),
-      headerTextboxes: story(ccpHdrTxbx)
-    };
+    // Story boundaries: body is [0, ccpText); each follows consecutively.
+    var bounds = [['body', 0, ccpText]], cp = ccpText;
+    function add(name, len) { bounds.push([name, cp, cp + len]); cp += len; }
+    add('footnotes', ccpFtn); add('headers', ccpHdd); add('annotations', ccpAtn);
+    add('endnotes', ccpEdn); add('textboxes', ccpTxbx); add('headerTextboxes', ccpHdrTxbx);
+
+    var doc = { html: {} };
+    for (var bi = 0; bi < bounds.length; bi++) {
+      var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
+      doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
+      doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
+    }
+    return doc;
   }
 
   // Parse the CLX: zero or more Prc records, then a Pcdt holding the PlcPcd
@@ -353,12 +378,12 @@
     return pieces;
   }
 
-  // ---- tracked-change deletions ([MS-DOC] CHPX bin table) -----------------
-  // The character formatting of every run lives in CHPX FKP "pages" indexed by
-  // PlcfBteChpx. A run marked with sprmCFRMarkDel (0x0801 = 1) is tracked-change
-  // deleted text; we collect those runs' WordDocument byte ranges so extraction
-  // can drop them. FibRgFcLcb97 #12 = fcPlcfBteChpx/lcbPlcfBteChpx (table stream).
-  function parseDeletedRanges(wd, table, fibRgFcLcbStart, fibDv) {
+  // ---- character runs & formatting ([MS-DOC] CHPX bin table) ---------------
+  // Every run's character properties live in CHPX FKP "pages" indexed by
+  // PlcfBteChpx (FibRgFcLcb97 #12). parseChpx returns the runs in WordDocument
+  // byte order, each with the direct character properties we use: the tracked-
+  // deletion flag plus bold/italic/strike/underline/size/color/font/char-style.
+  function parseChpx(wd, table, fibRgFcLcbStart, fibDv) {
     try {
       var pair = fibRgFcLcbStart + 12 * 8;
       if (pair + 8 > wd.length) return null;
@@ -369,59 +394,65 @@
       var n = Math.floor((lcb - 4) / 8);          // PlcfBteChpx: n+1 FCs + n PNs
       if (n < 1) return null;
       var pnBase = fc + (n + 1) * 4;
-      var ranges = [];
+      var runs = [];
       for (var i = 0; i < n; i++) {
         var pn = tdv.getUint32(pnBase + i * 4, true) & 0x003FFFFF; // PnFkpChpx.pn
-        collectFkpDeletions(wd, pn * 512, ranges);
+        collectFkpRuns(wd, pn * 512, runs);
       }
-      if (!ranges.length) return [];
-      ranges.sort(function (a, b) { return a[0] - b[0]; });
-      var merged = [ranges[0]];
-      for (var j = 1; j < ranges.length; j++) {
-        var last = merged[merged.length - 1];
-        if (ranges[j][0] <= last[1]) { if (ranges[j][1] > last[1]) last[1] = ranges[j][1]; }
-        else merged.push(ranges[j]);
-      }
-      return merged;
+      runs.sort(function (x, y) { return x.a - y.a; });
+      return runs;
     } catch (e) { return null; }
   }
 
   // One ChpxFkp page (512 bytes at pn*512): crun at byte 511, rgfc[crun+1],
   // then rgb[crun] (word offsets to each Chpx; 0 = default props).
-  function collectFkpDeletions(wd, pageOff, ranges) {
+  function collectFkpRuns(wd, pageOff, runs) {
     if (pageOff < 0 || pageOff + 512 > wd.length) return;
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
     var crun = wd[pageOff + 511];
     if (!crun) return;
     var rgbBase = pageOff + 4 * (crun + 1);
     for (var i = 0; i < crun; i++) {
+      var a = dv.getUint32(pageOff + i * 4, true);
+      var b = dv.getUint32(pageOff + (i + 1) * 4, true);
+      if (b <= a) continue;
+      var props = {};
       var word = wd[rgbBase + i];
-      if (!word) continue;                          // default formatting
-      var chpxOff = pageOff + word * 2;             // Chpx: cb, then grpprl
-      if (chpxOff < pageOff || chpxOff >= pageOff + 512) continue;
-      var cb = wd[chpxOff];
-      if (chpxOff + 1 + cb > pageOff + 512) continue;
-      if (grpprlHasDelete(wd, chpxOff + 1, cb)) {
-        var s = dv.getUint32(pageOff + i * 4, true);
-        var e = dv.getUint32(pageOff + (i + 1) * 4, true);
-        if (e > s) ranges.push([s, e]);
+      if (word) {
+        var chpxOff = pageOff + word * 2;             // Chpx: cb, then grpprl
+        if (chpxOff >= pageOff && chpxOff < pageOff + 512) {
+          var cb = wd[chpxOff];
+          if (chpxOff + 1 + cb <= pageOff + 512) props = parseChpGrpprl(wd, chpxOff + 1, cb);
+        }
       }
+      runs.push({ a: a, b: b, p: props });
     }
   }
 
-  // Scan a grpprl for sprmCFRMarkDel (0x0800 = the deletion revision mark;
-  // 0x0801 is sprmCFRMark, an *insertion*, which we keep). Its operand is a
-  // ToggleOperand: 0x01 = on, 0x81 = invert the (off) style default = on — both
-  // mean deleted, so the property is "on" exactly when bit 0 is set.
-  function grpprlHasDelete(wd, off, len) {
-    var p = off, end = off + len;
-    while (p + 2 <= end) {
-      var sprm = wd[p] | (wd[p + 1] << 8);
-      p += 2;
-      if (sprm === 0x0800) return (wd[p] & 1) === 1;
-      p += sprmOperandLen(sprm, wd, p);
+  // Decode the character sprms we render from a Chpx grpprl. Codes verified
+  // empirically against real documents. ToggleOperand props (bold/italic/...)
+  // are "on" exactly when bit 0 of the operand is set (covers 0x01 and 0x81 —
+  // 0x81 = "invert the off style default" = on; the same rule as deletions).
+  function parseChpGrpprl(wd, off, len) {
+    var p = {}, q = off, end = off + len;
+    while (q + 2 <= end) {
+      var sprm = wd[q] | (wd[q + 1] << 8); q += 2;
+      switch (sprm) {
+        case 0x0800: p.del = (wd[q] & 1) === 1; break;        // sprmCFRMarkDel (deletion)
+        case 0x0835: p.b = (wd[q] & 1) === 1; break;          // bold
+        case 0x0836: p.i = (wd[q] & 1) === 1; break;          // italic
+        case 0x0837: p.strike = (wd[q] & 1) === 1; break;     // strikethrough
+        case 0x083C: p.hidden = (wd[q] & 1) === 1; break;     // vanish (hidden text)
+        case 0x2A3E: p.u = wd[q]; break;                       // underline kind (0 = none)
+        case 0x4A43: p.hps = wd[q] | (wd[q + 1] << 8); break;  // font size, half-points
+        case 0x2A42: p.ico = wd[q]; break;                     // color, 16-colour palette index
+        case 0x6870: p.cv = (wd[q] | (wd[q + 1] << 8) | (wd[q + 2] << 16)) >>> 0; break; // 24-bit RGB
+        case 0x4A4F: p.ftc = wd[q] | (wd[q + 1] << 8); break;  // font index (ftc0) -> SttbfFfn
+        case 0x4A30: p.istd = wd[q] | (wd[q + 1] << 8); break; // character style index
+      }
+      q += sprmOperandLen(sprm, wd, q);
     }
-    return false;
+    return p;
   }
 
   // Operand size from the sprm's spra field (bits 13-15). spra 6 is variable:
@@ -438,19 +469,151 @@
     }
   }
 
-  // Binary-search predicate over sorted, merged deleted [start, end) ranges.
-  function makeIsDeleted(ranges) {
-    if (!ranges || !ranges.length) return null;
-    return function (fc) {
-      var lo = 0, hi = ranges.length - 1;
-      while (lo <= hi) {
-        var mid = (lo + hi) >> 1;
-        if (fc < ranges[mid][0]) hi = mid - 1;
-        else if (fc >= ranges[mid][1]) lo = mid + 1;
-        else return true;
+  // Binary-search the CHPX run containing a WordDocument byte offset.
+  function runAt(runs, fc) {
+    var lo = 0, hi = runs.length - 1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (fc < runs[mid].a) hi = mid - 1;
+      else if (fc >= runs[mid].b) lo = mid + 1;
+      else return runs[mid];
+    }
+    return null;
+  }
+
+  // Tracked-deletion predicate derived from the CHPX runs.
+  function makeIsDeleted(runs) {
+    if (!runs || !runs.length) return null;
+    return function (fc) { var r = runAt(runs, fc); return !!(r && r.p.del); };
+  }
+
+  // Font table: SttbfFfn (FibRgFcLcb97 #15) -> array of font names indexed by
+  // the ftc used in sprmCRgFtc0. The STTB is "extended" (Unicode); each entry
+  // is an FFN whose own cbFfnM1 byte gives its length, with the name (a null-
+  // terminated UTF-16 string) at byte 40. [MS-DOC] SttbfFfn / FFN.
+  function parseFonts(table, fibRgFcLcbStart, fibDv) {
+    try {
+      var fc = fibDv.getUint32(fibRgFcLcbStart + 15 * 8, true);
+      var lcb = fibDv.getUint32(fibRgFcLcbStart + 15 * 8 + 4, true);
+      if (lcb < 6 || fc < 0 || fc + lcb > table.length) return null;
+      var dv = new DataView(table.buffer, table.byteOffset, table.byteLength);
+      var end = fc + lcb, p = fc, cData;
+      // Header: optional fExtend (0xFFFF) marker, then cData (count) + cbExtra.
+      // FFN names are UTF-16 regardless; each FFN is self-sized via cbFfnM1.
+      if (dv.getUint16(p, true) === 0xFFFF) { p += 2; cData = dv.getUint16(p, true); p += 4; }
+      else { cData = dv.getUint16(p, true); p += 4; }
+      var fonts = [];
+      for (var i = 0; i < cData && p < end; i++) {
+        var ffnEnd = p + table[p] + 1;                   // table[p] = cbFfnM1
+        var name = '';
+        for (var q = p + 40; q + 1 < ffnEnd && q + 1 < end; q += 2) {
+          var ch = table[q] | (table[q + 1] << 8);
+          if (ch === 0) break;
+          name += String.fromCharCode(ch);
+        }
+        fonts.push(name);
+        p = ffnEnd;
       }
-      return false;
-    };
+      return fonts;
+    } catch (e) { return null; }
+  }
+
+  // Stylesheet: STSH (Stshf at FibRgFcLcb97 #1) -> resolved character props per
+  // style index (istd), so formatting carried by a style (a heading's bold, a
+  // hyperlink's blue+underline) isn't lost. Each STD has a CHP grpprl and an
+  // istdBase parent it inherits from. [MS-DOC] STSH / STSHI / STD / STDF / UPX.
+  function parseStsh(table, fibStart, fibDv) {
+    try {
+      var fc = fibDv.getUint32(fibStart + 1 * 8, true);   // #1 = fcStshf
+      var lcb = fibDv.getUint32(fibStart + 1 * 8 + 4, true);
+      if (lcb < 6 || fc < 0 || fc + lcb > table.length) return null;
+      var dv = new DataView(table.buffer, table.byteOffset, table.byteLength);
+      var end = fc + lcb;
+      var cbStshi = dv.getUint16(fc, true), stshi = fc + 2;
+      var cstd = dv.getUint16(stshi, true);               // STSHI.cstd
+      var cbBase = dv.getUint16(stshi + 2, true);         // STSHI.cbSTDBaseInFile
+      var p = stshi + cbStshi;                            // -> rgStd
+      // Pass 1: each style's own CHP grpprl + parent.
+      var raw = new Array(cstd);
+      for (var i = 0; i < cstd && p + 2 <= end; i++) {
+        var cbStd = dv.getUint16(p, true); p += 2;
+        var std = p; p += cbStd;
+        if (cbStd === 0 || std + cbBase + 2 > end) { raw[i] = null; continue; }
+        var word1 = dv.getUint16(std + 2, true);
+        var stk = word1 & 0xF;                            // style kind (1=para,2=char), low 4 bits
+        var istdBase = (word1 >> 4) & 0x0FFF;             // parent style (0xFFF = none), high 12 bits
+        var cupx = dv.getUint16(std + 4, true) & 0xF;     // count of UPX, low 4 bits
+        var nameAt = std + cbBase, cch = dv.getUint16(nameAt, true);
+        var up = nameAt + 2 + cch * 2 + 2;                // past style name + chTerm
+        var chpIdx = stk === 1 ? 1 : 0;                   // para style: CHP is 2nd UPX
+        var chp = {};
+        for (var u = 0; u < cupx && up + 2 <= std + cbStd; u++) {
+          var cbUpx = dv.getUint16(up, true); up += 2;
+          if (u === chpIdx) chp = parseChpGrpprl(table, up, cbUpx);
+          up += cbUpx; if (up & 1) up++;                  // UPXs are padded to even
+        }
+        raw[i] = { base: istdBase, chp: chp };
+      }
+      // Pass 2: resolve inheritance (parent props, then own props).
+      var out = new Array(cstd);
+      function resolve(i, depth) {
+        if (i == null || i < 0 || i >= cstd || !raw[i] || depth > 24) return {};
+        if (out[i]) return out[i];
+        var r = {}, k, base = raw[i].base !== 0x0FFF ? resolve(raw[i].base, depth + 1) : {};
+        for (k in base) r[k] = base[k];
+        for (k in raw[i].chp) r[k] = raw[i].chp[k];
+        return (out[i] = r);
+      }
+      for (var j = 0; j < cstd; j++) resolve(j, 0);
+      return out;
+    } catch (e) { return null; }
+  }
+
+  // Paragraph bin table: PlcfBtePapx (FibRgFcLcb97 #13) -> the paragraph style
+  // index (istd) for each WordDocument byte range, so a run inherits its
+  // paragraph style's character formatting (e.g. a heading's bold). We only
+  // need each paragraph's istd. [MS-DOC] PlcfBtePapx / PapxFkp / PapxInFkp.
+  function parsePapx(wd, table, fibStart, fibDv) {
+    try {
+      var fc = fibDv.getUint32(fibStart + 13 * 8, true);
+      var lcb = fibDv.getUint32(fibStart + 13 * 8 + 4, true);
+      if (lcb < 4 || fc < 0 || fc + lcb > table.length) return null;
+      var tdv = new DataView(table.buffer, table.byteOffset, table.byteLength);
+      var n = Math.floor((lcb - 4) / 8);
+      if (n < 1) return null;
+      var pnBase = fc + (n + 1) * 4, runs = [];
+      for (var i = 0; i < n; i++) {
+        var pn = tdv.getUint32(pnBase + i * 4, true) & 0x003FFFFF;
+        collectPapxFkp(wd, pn * 512, runs);
+      }
+      runs.sort(function (x, y) { return x.a - y.a; });
+      return runs;
+    } catch (e) { return null; }
+  }
+
+  // One PapxFkp page: crun at byte 511, rgfc[crun+1], then rgbx[crun] (BxPap,
+  // 13 bytes each; first byte is the word offset to a PapxInFkp, 0 = default).
+  function collectPapxFkp(wd, pageOff, runs) {
+    if (pageOff < 0 || pageOff + 512 > wd.length) return;
+    var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
+    var crun = wd[pageOff + 511];
+    if (!crun) return;
+    var bxBase = pageOff + 4 * (crun + 1);
+    for (var i = 0; i < crun; i++) {
+      var a = dv.getUint32(pageOff + i * 4, true);
+      var b = dv.getUint32(pageOff + (i + 1) * 4, true);
+      if (b <= a) continue;
+      var bOff = wd[bxBase + i * 13], istd = 0;          // BxPap.bOffset
+      if (bOff) {
+        var papx = pageOff + bOff * 2;                   // PapxInFkp
+        if (papx >= pageOff && papx < pageOff + 510) {
+          var cb = wd[papx];                             // GrpPrlAndIstd starts at:
+          var g = cb !== 0 ? papx + 1 : papx + 2;        // cb!=0 -> +1, else +2
+          if (g + 2 <= pageOff + 512) istd = wd[g] | (wd[g + 1] << 8);
+        }
+      }
+      runs.push({ a: a, b: b, istd: istd });
+    }
   }
 
   // Extract the text of one CP range [lo, hi): the body uses [0, ccpText) and
@@ -492,6 +655,94 @@
       }
     }
     flushCells(out, state); // a row mark may be the very last thing in a story
+    return out.join('');
+  }
+
+  // ---- styled HTML output ([MS-DOC] character formatting) -----------------
+  // Old Word 16-colour palette for sprmCIco (0=auto, 1=black -> default text).
+  var ICO_PALETTE = ['', '', 'blue', 'cyan', 'lime', 'magenta', 'red', 'yellow',
+    'white', 'navy', 'teal', 'green', 'purple', 'maroon', 'olive', 'gray', 'silver'];
+
+  function escHtml(s) {
+    return s.replace(/[&<>]/g, function (c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; });
+  }
+
+  // Resolved character props -> inline CSS ('' for default formatting).
+  function styleCss(p) {
+    if (!p) return '';
+    var css = '';
+    if (p.b) css += 'font-weight:bold;';
+    if (p.i) css += 'font-style:italic;';
+    var deco = '';
+    if (p.u) deco += 'underline ';
+    if (p.strike) deco += 'line-through ';
+    if (deco) css += 'text-decoration:' + deco.trim() + ';';
+    if (p.hps) css += 'font-size:' + (p.hps / 2) + 'pt;';
+    if (p.font) css += "font-family:'" + p.font.replace(/['\\<>]/g, '') + "';";
+    var col = colorOf(p);
+    if (col) css += 'color:' + col + ';';
+    return css;
+  }
+  function colorOf(p) {
+    if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) {
+      return 'rgb(' + (p.cv & 0xFF) + ',' + ((p.cv >> 8) & 0xFF) + ',' + ((p.cv >> 16) & 0xFF) + ')';
+    }
+    if (p.ico != null && p.ico > 1 && p.ico < ICO_PALETTE.length) return ICO_PALETTE[p.ico];
+    return '';
+  }
+
+  // Like extractRange, but wraps styled text runs in <span> (HTML-escaped).
+  // Structural marks stay bare — \t between table cells, \n at row/paragraph
+  // breaks — so the caller can build <table>/<p>. resolve(fc) returns the
+  // resolved character props for the char at WordDocument offset fc.
+  function extractRangeStyled(wd, pieces, lo, hi, isDeleted, resolve) {
+    if (hi <= lo) return '';
+    var out = [], buf = '', curCss = null, fieldStack = [], cells = 0;
+    function flushRun() {
+      if (!buf) return;
+      out.push(curCss ? '<span style="' + curCss + '">' + escHtml(buf) + '</span>' : escHtml(buf));
+      buf = '';
+    }
+    function flushCells() { if (!cells) return; flushRun(); out.push(cells === 1 ? '\t' : '\n'); cells = 0; }
+    function feed(code, fc) {
+      if (code === 0x13) { flushCells(); fieldStack.push(true); return; }
+      if (code === 0x14) { flushCells(); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
+      if (code === 0x15) { flushCells(); if (fieldStack.length) fieldStack.pop(); return; }
+      for (var i = 0; i < fieldStack.length; i++) if (fieldStack[i]) return;
+      if (code === 0x07) { cells++; return; }
+      flushCells();
+      var ch = mapChar(code);
+      if (ch === '') return;
+      if (ch === '\n' || ch === '\t') { flushRun(); out.push(ch); return; }
+      var css = resolve ? styleCss(resolve(fc)) : '';
+      if (css !== curCss) { flushRun(); curCss = css; }
+      buf += ch;
+    }
+    for (var i = 0; i < pieces.length; i++) {
+      var pc = pieces[i];
+      var a = lo > pc.cpStart ? lo : pc.cpStart;
+      var b = hi < pc.cpEnd ? hi : pc.cpEnd;
+      if (a >= b) continue;
+      var start = a - pc.cpStart, count = b - a;
+      if (pc.compressed) {
+        var base = pc.offset + start;
+        for (var k = 0; k < count; k++) {
+          var fc = base + k;
+          if (isDeleted && isDeleted(fc)) continue;
+          var byte = wd[fc]; if (byte === undefined) break;
+          feed(byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte), fc);
+        }
+      } else {
+        var u = pc.offset + start * 2;
+        for (var m = 0; m < count; m++) {
+          var fc2 = u + m * 2;
+          if (isDeleted && isDeleted(fc2)) continue;
+          var loB = wd[fc2]; if (loB === undefined) break;
+          feed(loB | ((wd[fc2 + 1] || 0) << 8), fc2);
+        }
+      }
+    }
+    flushCells(); flushRun();
     return out.join('');
   }
 
