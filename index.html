@@ -66,6 +66,7 @@
   #edit:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   #rich p, #edit p { margin: 0 0 10px; }
   #rich p:last-child, #edit p:last-child { margin-bottom: 0; }
+  #rich h3.sec, #edit h3.sec { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -243,24 +244,41 @@
     lastName = (name || "document").replace(/\.doc$/i, "");
     result.classList.remove("hidden");
 
-    var text;
-    try { text = docToText(buffer); }
-    catch (e) { text = null; }
+    var doc;
+    try { doc = docToText.sections(buffer); }
+    catch (e) { doc = null; }
 
-    if (text === null || text === undefined) {
+    if (!doc) {
       warn(name, "Couldn't extract text — this is likely Word 6/95, an encrypted " +
         "document, or not a binary .doc. In a real app this is where the Download / " +
         "open-in-Word fallback would appear.");
       return;
     }
 
-    lastText = text;
+    // Main body, plus any non-empty extra stories (footnotes, headers, …).
+    var STORIES = [
+      ["footnotes", "Footnotes"], ["endnotes", "Endnotes"],
+      ["headers", "Headers & footers"], ["annotations", "Comments"],
+      ["textboxes", "Text boxes"], ["headerTextboxes", "Header text boxes"]
+    ];
+    var plain = doc.body, html = toHtml(doc.body), extras = [];
+    for (var s = 0; s < STORIES.length; s++) {
+      var v = doc[STORIES[s][0]];
+      if (v && v.replace(/\s+/g, "")) {
+        extras.push(STORIES[s][1]);
+        plain += "\n\n" + STORIES[s][1] + ":\n" + v;
+        html += '<h3 class="sec">' + esc(STORIES[s][1]) + "</h3>" + toHtml(v);
+      }
+    }
+
+    lastText = plain;
     meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
       '<span class="badge ok">extracted</span> &nbsp;' +
-      esc(text.length.toLocaleString()) + " chars";
+      esc(doc.body.length.toLocaleString()) + " body chars" +
+      (extras.length ? " · +" + esc(extras.join(", ").toLowerCase()) : "");
     fallback.classList.add("hidden");
-    rich.innerHTML = toHtml(text);
-    out.textContent = text.length ? text : "(document contains no main-body text)";
+    rich.innerHTML = html;
+    out.textContent = plain.length ? plain : "(document contains no main-body text)";
     editReady = false; edit.innerHTML = ""; // fresh edit buffer per document
     viewtoggle.classList.remove("hidden");
     setView("rich");

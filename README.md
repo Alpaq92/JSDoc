@@ -48,12 +48,13 @@ const text = docToText(require('fs').readFileSync('file.doc'));
 
 The main body text and its paragraph breaks. Smart quotes and non-Latin scripts come through correctly, and field codes are stripped — you keep the result (say, the page number) and lose the `PAGE` instruction behind it. It's deliberately lossy: a text view, the way an `.rtf` looks in a plain reader.
 
+`docToText.sections(input)` returns the document's separate stories — `{ body, footnotes, headers, annotations, endnotes, textboxes, headerTextboxes }` (each a string) — so **headers, footers, footnotes, endnotes, comments, and text boxes** come through too; they sit right after the body in the same piece table. `body` is exactly what `docToText()` returns, and the demo shows the rest as labeled sections.
+
 Not handled yet (and where each would slot in):
 
 - **Tables** come out as one row per line with tab-separated columns — close to the original grid, though merged or empty cells can nudge the columns.
-- **Headers, footers, and footnotes** are skipped — they live past `ccpText` in the same piece table.
-- **Tracked deletions** stay in (the deleted text is still in the stream; dropping it needs the revision marks).
-- No fonts, images, or styling.
+- **Tracked deletions** still come through (the deleted text is in the stream; dropping it needs the character-level revision marks) — *coming next.*
+- No fonts, images, or styling — *coming next.*
 
 ## How it works
 

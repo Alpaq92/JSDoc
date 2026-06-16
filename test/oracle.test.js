@@ -112,8 +112,8 @@ function prefixMatch(a, b, n) {
       var buf = fs.readFileSync(p);
       var mine = docToText(buf);
 
-      var oracle;
-      try { oracle = (await extractor.extract(buf)).getBody(); }
+      var oracle, odoc;
+      try { odoc = await extractor.extract(buf); oracle = odoc.getBody(); }
       catch (e) { console.log('  skip ' + DOCS[i] + ' (oracle error: ' + e.message + ')'); ran--; continue; }
 
       if (mine == null) {
@@ -132,6 +132,20 @@ function prefixMatch(a, b, n) {
         failures++;
         console.log('      mine[0..15]   ' + JSON.stringify(ta.slice(0, 15)));
         console.log('      oracle[0..15] ' + JSON.stringify(tb.slice(0, 15)));
+      }
+
+      // Extra stories vs word-extractor's matching getters (only when present).
+      var sects = docToText.sections(buf) || {};
+      var SECS = [['footnotes', 'getFootnotes'], ['headers', 'getHeaders'], ['endnotes', 'getEndnotes'], ['annotations', 'getAnnotations']];
+      for (var si = 0; si < SECS.length; si++) {
+        var oo = ''; try { oo = odoc[SECS[si][1]](); } catch (e) { oo = ''; }
+        var ob = tokens(oo);
+        if (!ob.length) continue;
+        var mt = tokens(sects[SECS[si][0]]);
+        var rc = overlap(mt, ob).recall;
+        if (rc < RECALL_MIN) failures++;
+        console.log('    ' + (rc >= RECALL_MIN ? 'ok  ' : 'FAIL') + ' ' + DOCS[i] + ' / ' + SECS[si][0] +
+          '  recall=' + rc.toFixed(3) + ' (mine=' + mt.length + ', oracle=' + ob.length + ')');
       }
     }
 

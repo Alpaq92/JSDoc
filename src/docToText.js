@@ -24,9 +24,9 @@
  *            for the host to fall back to its download / handoff path.
  *
  * Scope (lossy by design, like a plain-text/RTF view): main document body
- * text and paragraph breaks only. No fonts, images, or styles. Tables collapse
- * to tab/newline text. Headers, footers, and footnotes live in separate CP
- * ranges and are out of scope for v1 (see extractText() for where they plug in).
+ * text and paragraph breaks. No fonts, images, or styles. Tables collapse to
+ * tab/newline text. Headers, footers, footnotes (and endnotes, comments,
+ * textboxes) are available as separate stories via docToText.sections().
  * Tracked-change *deletions* are kept (the deleted text is still in the main CP
  * range); dropping them would require parsing character-level revision marks
  * (sprmCFRMarkDel via the CHPX bin table) — a documented v2 extension.
@@ -56,25 +56,35 @@
   ];
 
   // ------------------------------------------------------------------------
-  // Public entry point
+  // Public entry points
   // ------------------------------------------------------------------------
-  function docToText(input) {
+
+  // Parse the whole document into its text stories, or null on failure.
+  function parse(input) {
     try {
       var bytes = toUint8(input);
       if (!bytes || bytes.length < 512) return null;
-
       var cfb = parseCfb(bytes);
       if (!cfb) return null;
-
       var wordDocument = cfb.byName['WordDocument'];
       if (!wordDocument) return null;
-      var wd = cfb.getStream(wordDocument);
-
-      return parseWord(wd, cfb);
+      return parseWord(cfb.getStream(wordDocument), cfb);
     } catch (e) {
       return null; // any failure -> graceful handoff
     }
   }
+
+  // docToText(input) -> main-body text, or null (unchanged, back-compatible).
+  function docToText(input) {
+    var doc = parse(input);
+    return doc ? doc.body : null;
+  }
+
+  // docToText.sections(input) -> { body, footnotes, headers, annotations,
+  // endnotes, textboxes, headerTextboxes } (each a string; "" when empty), or
+  // null. These are the document's separate text stories, which follow the
+  // main body consecutively in the same piece table. `body` === docToText().
+  docToText.sections = parse;
 
   // ------------------------------------------------------------------------
   // Layer 1 — [MS-CFB] OLE2 container
@@ -247,10 +257,15 @@
     /* cbRgFcLcb */ dv.getUint16(pos, true); pos += 2;
     var fibRgFcLcbStart = pos;
 
-    // ccpText = fibRgLw[3] (count of chars in the main document).
+    // Character counts of each text "story". They sit consecutively in the
+    // piece table after the main body, in this order (ccpMcr at index 6 is
+    // reserved and not part of the chain). [MS-DOC] FibRgLw97 + the PlcPcd
+    // aCP note (last CP = ccpText + sum of these + 1).
     if (fibRgLwStart + 16 > wd.length) return null;
-    var ccpText = dv.getUint32(fibRgLwStart + 3 * 4, true);
-    if (ccpText <= 0) return '';
+    function rgLw(i) { var o = fibRgLwStart + i * 4; return o + 4 <= wd.length ? dv.getUint32(o, true) : 0; }
+    var ccpText = rgLw(3); if (ccpText < 0) ccpText = 0;
+    var ccpFtn = rgLw(4), ccpHdd = rgLw(5), ccpAtn = rgLw(7),
+        ccpEdn = rgLw(8), ccpTxbx = rgLw(9), ccpHdrTxbx = rgLw(10);
 
     // fcClx / lcbClx = pair index 33 of FibRgFcLcb97.
     var clxPair = fibRgFcLcbStart + 33 * 8;
@@ -270,7 +285,18 @@
     var pieces = parsePieceTable(tableBytes, fcClx, lcbClx);
     if (!pieces) return null;
 
-    return extractText(wd, pieces, ccpText);
+    // The body is [0, ccpText); each subsequent story is the next CP range.
+    var cp = ccpText;
+    function story(len) { var s = extractRange(wd, pieces, cp, cp + len); cp += len; return s; }
+    return {
+      body: extractRange(wd, pieces, 0, ccpText),
+      footnotes: story(ccpFtn),
+      headers: story(ccpHdd),
+      annotations: story(ccpAtn),
+      endnotes: story(ccpEdn),
+      textboxes: story(ccpTxbx),
+      headerTextboxes: story(ccpHdrTxbx)
+    };
   }
 
   // Parse the CLX: zero or more Prc records, then a Pcdt holding the PlcPcd
@@ -324,42 +350,42 @@
     return pieces;
   }
 
-  // Walk pieces in CP order, decode, strip field codes and control marks,
-  // stopping once ccpText main-document characters have been consumed.
-  // (Footnote/header/footer ranges follow ccpText in the same piece table;
-  // a v2 would continue past ccpText for ccpFtn/ccpHdd and route those into
-  // separate buckets.)
-  function extractText(wd, pieces, ccpText) {
+  // Extract the text of one CP range [lo, hi): the body uses [0, ccpText) and
+  // each trailing story (footnotes, headers, ...) its own range. Pieces are in
+  // CP order (PlcPcd aCP is sorted), so we take each piece's overlap with the
+  // range. Decodes, strips field codes and control marks.
+  function extractRange(wd, pieces, lo, hi) {
+    if (hi <= lo) return '';
     var out = [];
     var fieldStack = []; // per open field: true while inside its instruction
     var state = { cells: 0 }; // run of pending table cell marks (0x07)
-    var consumed = 0;
 
-    for (var i = 0; i < pieces.length && consumed < ccpText; i++) {
+    for (var i = 0; i < pieces.length; i++) {
       var pc = pieces[i];
-      var count = pc.cpEnd - pc.cpStart;
-      if (count <= 0) continue;
-      if (consumed + count > ccpText) count = ccpText - consumed;
+      var a = lo > pc.cpStart ? lo : pc.cpStart;
+      var b = hi < pc.cpEnd ? hi : pc.cpEnd;
+      if (a >= b) continue;
+      var start = a - pc.cpStart; // first char index within this piece
+      var count = b - a;
 
       if (pc.compressed) {
-        var b0 = pc.offset;
+        var base = pc.offset + start;
         for (var k = 0; k < count; k++) {
-          var b = wd[b0 + k];
-          if (b === undefined) break;
+          var byte = wd[base + k];
+          if (byte === undefined) break;
           emit(out, fieldStack, state,
-            b < 0x80 ? b : (b <= 0x9F ? FC_COMPRESSED_MAP[b - 0x80] : b));
+            byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte));
         }
       } else {
-        var u0 = pc.offset;
+        var u = pc.offset + start * 2;
         for (var m = 0; m < count; m++) {
-          var lo = wd[u0 + m * 2];
-          if (lo === undefined) break;
-          emit(out, fieldStack, state, lo | ((wd[u0 + m * 2 + 1] || 0) << 8));
+          var loB = wd[u + m * 2];
+          if (loB === undefined) break;
+          emit(out, fieldStack, state, loB | ((wd[u + m * 2 + 1] || 0) << 8));
         }
       }
-      consumed += count;
     }
-    flushCells(out, state); // a row mark may be the very last thing in the body
+    flushCells(out, state); // a row mark may be the very last thing in a story
     return out.join('');
   }
 
