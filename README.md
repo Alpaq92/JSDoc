@@ -52,12 +52,14 @@ The main body text and its paragraph breaks. Smart quotes and non-Latin scripts 
 
 `docToText.html(input)` returns those same stories as **styled HTML** — each run wrapped in a `<span>` carrying its **bold / italic / underline / strikethrough, size, colour, and font** — with `\t` between table cells and `\n` at row/paragraph breaks. Formatting is fully resolved through the stylesheet (paragraph style → character style → direct run properties), so formatting that lives in a *style* — a heading's bold, a hyperlink's blue/underline — isn't lost, not just directly-applied sprms. The demo renders this as the Formatted view.
 
+`docToText.images(input)` returns `[{ mime, bytes }]` for **embedded raster images** (PNG/JPEG), carved by signature from the reassembled CFB streams and validated to their real end marker. The demo shows them as a gallery.
+
 **Tracked changes are resolved as "accept all":** deleted text is dropped (the `sprmCFRMarkDel` revision mark in the CHPX bin table) and inserted text kept.
 
 Not handled yet (and where each would slot in):
 
 - **Tables** come out as one row per line with tab-separated columns — close to the original grid, though merged or empty cells can nudge the columns.
-- **Images** — pictures are a `0x01` char whose CHPX points into the Data stream (`sprmCPicLocation`); embedded PNG/JPEG could be pulled out, but the common WMF/EMF metafiles can't be rendered in-browser without a heavy, non-permissive converter.
+- **WMF/EMF images** — only PNG/JPEG are extracted (see `docToText.images`); the common WMF/EMF *metafiles* can't be rendered in-browser without a heavy, non-permissive converter, so they're skipped. Exact inline image *placement* isn't reconstructed either — images come out as a set.
 - **Exact page layout** (line/page-break positions, columns, precise spacing) — that needs a real layout engine, not just property resolution.
 
 ## How it works

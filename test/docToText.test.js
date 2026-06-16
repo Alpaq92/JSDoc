@@ -64,6 +64,11 @@ check('html.body is a string containing the body text',
   !!htmlOut && typeof htmlOut.body === 'string' && htmlOut.body.indexOf('World') !== -1);
 check('html(null) -> null', docToText.html(null) === null);
 
+// 7. images(): array of carved raster images (none in this synthetic fixture).
+var imgs = docToText.images(doc.buffer);
+check('docToText.images returns an array', Array.isArray(imgs));
+check('images(null) -> null', docToText.images(null) === null);
+
 // --- graceful degradation (must return null, never throw) ---
 function nullCase(name, input) {
   var r;
