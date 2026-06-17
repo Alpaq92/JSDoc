@@ -175,6 +175,24 @@ check('detailed-sample column widths survive round-trip (unequal preserved)',
   JSON.stringify(twRe[0].tblw) === JSON.stringify(twOrig[0].tblw) &&
   JSON.stringify(twOrig[0].tblw) !== JSON.stringify([0, 3000, 6000, 9000]));
 
+// 14) Palette colours: a run coloured via the 16-colour palette (sprmCIco) rather
+// than an explicit RGB (sprmCCv) still reads back as that colour, in the model and
+// the styled HTML. The writer emits sprmCCv, so build a coloured run then
+// length-preservingly swap its sprm for sprmCIco(6 = red) + a harmless filler.
+var icoSrc = textToDoc([{ runs: [{ text: 'ICO', color: 0x123456 }], kind: 'p' }]);
+var icoNeedle = [0x70, 0x68, 0x56, 0x34, 0x12, 0x00];   // sprmCCv + COLORREF 0x123456
+var icoAt = -1;
+for (var ii = 0; ii + icoNeedle.length <= icoSrc.length && icoAt < 0; ii++) {
+  var icoOk = true; for (var jj = 0; jj < icoNeedle.length; jj++) if (icoSrc[ii + jj] !== icoNeedle[jj]) { icoOk = false; break; }
+  if (icoOk) icoAt = ii;
+}
+var icoDoc = Uint8Array.from(icoSrc);
+[0x42, 0x2A, 0x06, 0x35, 0x08, 0x00].forEach(function (b, k) { icoDoc[icoAt + k] = b; });   // sprmCIco(red) + sprmCFBold(0)
+var icoRun = null;
+docToText.model(icoDoc).body.forEach(function (p) { (p.runs || []).forEach(function (r) { if (r.text === 'ICO') icoRun = r; }); });
+check('sprmCIco palette colour maps to RGB in the model (red)', icoAt >= 0 && !!icoRun && icoRun.color === 0x0000FF);
+check('sprmCIco palette colour shows in the styled HTML', /rgb\(255,\s*0,\s*0\)/.test(docToText.html(icoDoc).body));
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).
