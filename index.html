@@ -77,7 +77,9 @@
   .docimg { max-width: 100%; max-height: 300px; height: auto; vertical-align: top; }
   .ftnref { color: var(--accent); font-weight: 600; padding: 0 1px; }
   .comref { color: #d08000; font-weight: 600; padding: 0 1px; cursor: help; }
-  .tbxref { color: var(--muted); padding: 0 1px; cursor: help; }
+  /* A text box: a floated bordered box holding its content, where it's anchored. */
+  .docbox { float: left; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; margin: 2px 14px 6px 0; background: rgba(127,127,127,.06); max-width: 260px; }
+  .docbox p { margin: 0; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -192,6 +194,7 @@
 
   var lastText = "";
   var lastModel = null;  // styled paragraph model of the loaded doc, for a formatted .doc round-trip
+  var tbxBoxHtml = "";   // rendered text-box content, placed inline at its body anchor
   var lastName = "document";
   var editReady = false; // becomes true once the Edit view has been populated for the current doc
 
@@ -273,7 +276,9 @@
       } else if (r.comRef != null) {
         s += '<sup class="comref" title="comment ' + (r.comRef + 1) + '">✎</sup>';
       } else if (r.tbxRef != null) {
-        s += '<span class="tbxref" title="text box ' + (r.tbxRef + 1) + '">▭</span>';
+        // Render the text box where it's anchored, as a floated bordered box
+        // holding its content (it sits at the left in the document).
+        s += '<span class="docbox" title="text box ' + (r.tbxRef + 1) + '">' + (tbxBoxHtml || "&nbsp;") + "</span>";
       } else if (r.text) {
         var css = runStyle(r);
         var inner = css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
@@ -375,9 +380,16 @@
     // inline images (a centred image stays centred), lists and tables. Falls
     // back to the flattened styled HTML if the model isn't available.
     var model = null; try { model = docToText.model ? docToText.model(buffer) : null; } catch (e) { }
+    // A body text box renders inline at its anchor (a floated box holding its
+    // content), so render that content now and skip the separate "Text boxes" story.
+    var hasTbx = !!(model && model.body && model.body.some(function (p) { return (p.runs || []).some(function (r) { return r.tbxRef != null; }); }));
+    // Inline content (no <p>) — the box is an inline-block <span>, so block tags
+    // inside would get hoisted out by the browser.
+    tbxBoxHtml = (hasTbx && model && model.textboxes) ? model.textboxes.filter(function (p) { return (p.runs || []).some(function (r) { return r.text || r.image; }); }).map(function (p) { return runsHtml(p.runs); }).join("<br>") : "";
     var plain = doc.body, html = (model && model.body) ? renderModel(model.body) : toHtml(doc.html.body, true), extras = [];
     for (var s = 0; s < STORIES.length; s++) {
       var key = STORIES[s][0], v = doc[key];
+      if (key === "textboxes" && hasTbx) continue;   // shown inline at its anchor instead
       if (v && v.replace(/\s+/g, "")) {
         extras.push(STORIES[s][1]);
         plain += "\n\n" + STORIES[s][1] + ":\n" + v;
