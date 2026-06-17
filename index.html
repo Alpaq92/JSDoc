@@ -265,6 +265,9 @@
         try { s += '<img class="docimg" src="' + URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mime })) + '" alt="embedded image">'; } catch (e) { }
       } else if (r.ftnRef != null) {
         s += '<sup class="ftnref" title="footnote ' + (r.ftnRef + 1) + '">' + (r.ftnRef + 1) + "</sup>";
+      } else if (r.endRef != null) {
+        var rn = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"][r.endRef] || (r.endRef + 1);
+        s += '<sup class="ftnref" title="endnote ' + (r.endRef + 1) + '">' + rn + "</sup>";
       } else if (r.text) {
         var css = runStyle(r);
         var inner = css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
