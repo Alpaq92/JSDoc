@@ -398,6 +398,7 @@
     try { dataStream = dataEntry ? cfb.getStream(dataEntry) : null; } catch (e) { }
     function paraAlign(fc) { var r = papx ? runAt(papx, fc) : null; return r ? (r.jc || 0) : 0; }
     var listKind = parseListNfc(tableBytes, fibRgFcLcbStart, dv);
+    var footnoteRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 2); // PlcffndRef #2 -> { bodyCp: footnoteIndex }
     function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
     // Paragraph spacing/indentation (twips): left/right/first-line indent, space
     // before/after, and line spacing (LSPD: line + lineMult flag). Only non-zero
@@ -417,7 +418,7 @@
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, nm === 'body' ? footnoteRefCps : null);
     }
     return doc;
   }
@@ -733,6 +734,21 @@
   // PlfLst (FibRgFcLcb #73) + PlfLfo (#74) -> ilfo (1-based) -> 'bullet'|'number'
   // from each list's level-0 number format (nfc: 23 = bullet; 0-22 = decimal/
   // roman/letters). Best-effort: missing/unreadable LVLs default to bullet.
+  // A reference PLC (PlcffndRef #2 etc.): N+1 CPs — the first N are the CPs of the
+  // reference characters (0x02) in the main story, the last is the doc-end lim —
+  // plus N 2-byte FRD records. Returns { bodyCp: refIndex } for the N references.
+  function parseRefCps(table, fibStart, fibDv, idx) {
+    try {
+      var fc = fibDv.getUint32(fibStart + idx * 8, true), lcb = fibDv.getUint32(fibStart + idx * 8 + 4, true);
+      if (lcb < 10 || fc < 0 || fc + lcb > table.length) return null;
+      var n = Math.floor((lcb - 4) / 6);
+      if (n < 1) return null;
+      var dv = new DataView(table.buffer, table.byteOffset, table.byteLength), map = {};
+      for (var i = 0; i < n; i++) map[dv.getUint32(fc + i * 4, true)] = i;
+      return map;
+    } catch (e) { return null; }
+  }
+
   function parseListNfc(table, fibStart, fibDv) {
     try {
       var lstFc = fibDv.getUint32(fibStart + 73 * 8, true), lstLcb = fibDv.getUint32(fibStart + 73 * 8 + 4, true);
@@ -894,7 +910,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, footnoteRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
@@ -914,7 +930,10 @@
     function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
     function endPara(kind, fc) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; paras.push(par); runs = []; curKey = null; curProps = null; }
     function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
-    function feed(code, fc) {
+    function feed(code, fc, cp) {
+      // A footnote reference (0x02) whose CP is listed in PlcffndRef: record an
+      // anchor run so the writer can re-place it and re-link the footnote text.
+      if (code === 0x02 && footnoteRefs && footnoteRefs[cp] != null) { flushRun(); runs.push({ ftnRef: footnoteRefs[cp] }); curKey = null; return; }
       // Field marks. For a top-level field we collect the instruction text (so a
       // HYPERLINK URL can be recovered) and tag the result runs with the URL.
       if (code === 0x13) { flushCells(); flushRun(); fieldStack.push(true); if (fieldStack.length === 1) { inInstr = true; instr = ''; curKey = null; } return; }
@@ -951,14 +970,14 @@
         for (var k = 0; k < count; k++) {
           var fc = base + k; if (isDeleted && isDeleted(fc)) continue;
           var byte = wd[fc]; if (byte === undefined) break;
-          feed(byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte), fc);
+          feed(byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte), fc, a + k);
         }
       } else {
         var u = pc.offset + start * 2;
         for (var m = 0; m < count; m++) {
           var fc2 = u + m * 2; if (isDeleted && isDeleted(fc2)) continue;
           var loB = wd[fc2]; if (loB === undefined) break;
-          feed(loB | ((wd[fc2 + 1] || 0) << 8), fc2);
+          feed(loB | ((wd[fc2 + 1] || 0) << 8), fc2, a + m);
         }
       }
     }

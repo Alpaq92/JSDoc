@@ -92,15 +92,33 @@ check('hyperlink URL round-trips on the result run', !!lr && lr.url === 'https:/
 var ltext = docToText(linkDoc);
 check('hyperlink instruction stays hidden from the text', ltext.indexOf('HYPERLINK') === -1 && ltext.replace(/\s+/g, ' ').indexOf('See the site.') !== -1);
 
-// 7) Independent oracle: word-extractor must still parse the styled .doc.
+// 7) Footnotes: a body anchor (ftnRef) + a footnote-document paragraph round-trip.
+// The reader re-emits the anchor, the footnote text lands in the footnote story
+// (ccpFtn + PlcffndRef/PlcffndTxt), and the body text stays clean.
+var ftnDoc = textToDoc({
+  body: [{ runs: [{ text: 'Body' }, { ftnRef: 0 }, { text: ' end.' }], kind: 'p' }],
+  footnotes: [{ runs: [{ text: ' A footnote.' }], kind: 'p' }]
+});
+var fm = docToText.model(ftnDoc);
+check('footnote anchor round-trips in the body', fm.body.some(function (p) { return (p.runs || []).some(function (r) { return r.ftnRef === 0; }); }));
+check('footnote text lands in the footnote story', (docToText.sections(ftnDoc).footnotes || '').indexOf('A footnote.') !== -1);
+check('footnote stays out of the body text', docToText(ftnDoc).indexOf('A footnote.') === -1 && docToText(ftnDoc).replace(/\s+/g, ' ').indexOf('Body end.') !== -1);
+
+// 8) Independent oracle: word-extractor must still parse the styled .doc AND read
+// the footnote we wrote (proves the footnote PLCs are structurally valid, not
+// orphaned text the body parser happens to skip).
 (function () {
   var WordExtractor;
   try { WordExtractor = require('word-extractor'); }
   catch (e) { console.log('\n  skip word-extractor cross-check (not installed)'); return done(); }
-  new WordExtractor().extract(Buffer.from(doc2)).then(function (d) {
+  var we = new WordExtractor();
+  we.extract(Buffer.from(doc2)).then(function (d) {
     check('word-extractor parses the styled .doc', d.getBody().indexOf('Lorem') !== -1);
+    return we.extract(Buffer.from(ftnDoc));
+  }).then(function (d2) {
+    check('word-extractor reads the written footnote (getFootnotes)', (d2.getFootnotes() || '').indexOf('A footnote.') !== -1);
     done();
-  }).catch(function (e) { check('word-extractor parses the styled .doc (' + e.message + ')', false); done(); });
+  }).catch(function (e) { check('word-extractor cross-check (' + e.message + ')', false); done(); });
 })();
 
 function done() { console.log(failures === 0 ? '\nALL PASSED' : '\n' + failures + ' FAILURE(S)'); process.exit(failures === 0 ? 0 : 1); }

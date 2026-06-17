@@ -75,6 +75,7 @@
   /* Inline images in the Formatted view — sit where they belong (so a centred
      image is centred via its paragraph's text-align). */
   .docimg { max-width: 100%; max-height: 300px; height: auto; vertical-align: top; }
+  .ftnref { color: var(--accent); font-weight: 600; padding: 0 1px; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -262,6 +263,8 @@
       var r = runs[i];
       if (r.image && r.image.bytes) {
         try { s += '<img class="docimg" src="' + URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mime })) + '" alt="embedded image">'; } catch (e) { }
+      } else if (r.ftnRef != null) {
+        s += '<sup class="ftnref" title="footnote ' + (r.ftnRef + 1) + '">' + (r.ftnRef + 1) + "</sup>";
       } else if (r.text) {
         var css = runStyle(r);
         var inner = css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
@@ -375,8 +378,9 @@
     var imgs = docToText.images(buffer) || []; // for the meta count; images render inline above
 
     lastText = plain;
-    // Reuse the model computed above so "Download .doc" round-trips the formatting.
-    lastModel = model && model.body || null;
+    // Reuse the whole model computed above so "Download .doc" round-trips the
+    // formatting AND non-body stories (footnotes); textToDoc reads .body + .footnotes.
+    lastModel = model || null;
     meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
       '<span class="badge ok">extracted</span> &nbsp;' +
       esc(doc.body.length.toLocaleString()) + " body chars" +
