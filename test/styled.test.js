@@ -56,7 +56,18 @@ var imgData = textToDoc.readCfb(imgDoc).byName['Data'];
 check('image embeds into a Data stream (exact bytes)', !!imgData && Buffer.from(imgData).indexOf(PNG) !== -1);
 check('centred paragraph round-trips (sprmPJc)', docToText.model(imgDoc).body.some(function (p) { return p.align === 1; }));
 
-// 4) Independent oracle: word-extractor must still parse the styled .doc.
+// 4) Lists: bullet + numbered paragraphs map to the skeleton's built-in lists
+// (sprmPIlfo/sprmPIlvl) and read back as list paragraphs with their level.
+var listDoc = textToDoc([
+  { runs: [{ text: 'one' }], kind: 'p', list: { kind: 'bullet', ilvl: 0 } },
+  { runs: [{ text: 'sub' }], kind: 'p', list: { kind: 'bullet', ilvl: 1 } },
+  { runs: [{ text: 'step' }], kind: 'p', list: { kind: 'number', ilvl: 0 } }
+]);
+var lm = docToText.model(listDoc).body.filter(function (p) { return p.list; });
+check('lists round-trip (3 list paragraphs, with level)', lm.length === 3 && lm[1].list.ilvl === 1);
+check('bullet list detected', lm[0].list.kind === 'bullet');
+
+// 5) Independent oracle: word-extractor must still parse the styled .doc.
 (function () {
   var WordExtractor;
   try { WordExtractor = require('word-extractor'); }
