@@ -420,6 +420,24 @@
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
       doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, nm === 'body' ? footnoteRefCps : null);
     }
+    // Split the header document (PlcfHdd) into the real page header & footer for
+    // the first section — skipping the footnote/endnote separator stories (0-5)
+    // and preferring odd-page, then first-page, then even-page. doc.model.header /
+    // .footer feed the writer (a clean header/footer, not separator noise).
+    var hdd = parsePlcfHdd(tableBytes, fibRgFcLcbStart, dv);
+    if (hdd && ccpHdd > 0) {
+      var hddStart = ccpText + ccpFtn;
+      var pick = function (cands) {
+        for (var c = 0; c < cands.length; c++) { var k = cands[c]; if (k + 1 < hdd.length && hdd[k + 1] > hdd[k]) return k; }
+        return -1;
+      };
+      var grab = function (k) {
+        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, null);
+      };
+      var hK = pick([7, 10, 6]), fK = pick([9, 11, 8]);   // header: odd/first/even; footer: odd/first/even
+      if (hK >= 0) doc.model.header = grab(hK);
+      if (fK >= 0) doc.model.footer = grab(fK);
+    }
     return doc;
   }
 
@@ -746,6 +764,19 @@
       var dv = new DataView(table.buffer, table.byteOffset, table.byteLength), map = {};
       for (var i = 0; i < n; i++) map[dv.getUint32(fc + i * 4, true)] = i;
       return map;
+    } catch (e) { return null; }
+  }
+
+  // PlcfHdd (#11): CPs (relative to the header document) delimiting its stories.
+  // Stories 0-5 are footnote/endnote separators; then 6 per section — even/odd/
+  // first page header, then even/odd/first page footer. Returns the CP array.
+  function parsePlcfHdd(table, fibStart, fibDv) {
+    try {
+      var fc = fibDv.getUint32(fibStart + 11 * 8, true), lcb = fibDv.getUint32(fibStart + 11 * 8 + 4, true);
+      if (lcb < 8 || fc < 0 || fc + lcb > table.length) return null;
+      var n = Math.floor(lcb / 4), dv = new DataView(table.buffer, table.byteOffset, table.byteLength), cps = [];
+      for (var i = 0; i < n; i++) cps.push(dv.getUint32(fc + i * 4, true));
+      return cps;
     } catch (e) { return null; }
   }
 

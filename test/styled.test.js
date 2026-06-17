@@ -104,8 +104,21 @@ check('footnote anchor round-trips in the body', fm.body.some(function (p) { ret
 check('footnote text lands in the footnote story', (docToText.sections(ftnDoc).footnotes || '').indexOf('A footnote.') !== -1);
 check('footnote stays out of the body text', docToText(ftnDoc).indexOf('A footnote.') === -1 && docToText(ftnDoc).replace(/\s+/g, ' ').indexOf('Body end.') !== -1);
 
-// 8) Independent oracle: word-extractor must still parse the styled .doc AND read
-// the footnote we wrote (proves the footnote PLCs are structurally valid, not
+// 8) Headers/footers: a header + footer round-trip into the header document
+// (PlcfHdd story 7 / 9), read back as model.header/.footer, kept out of the body.
+var hfDoc = textToDoc({
+  body: [{ runs: [{ text: 'Body.' }], kind: 'p' }],
+  header: [{ runs: [{ text: 'The Header' }], kind: 'p' }],
+  footer: [{ runs: [{ text: 'The Footer' }], kind: 'p' }]
+});
+var hfm = docToText.model(hfDoc);
+function flatText(ps) { return ps ? ps.map(function (p) { return (p.runs || []).map(function (r) { return r.text || ''; }).join(''); }).join(' ').trim() : ''; }
+check('header round-trips into the header document', flatText(hfm.header).indexOf('The Header') !== -1);
+check('footer round-trips into the header document', flatText(hfm.footer).indexOf('The Footer') !== -1);
+check('header/footer stay out of the body', docToText(hfDoc).indexOf('The Header') === -1 && docToText(hfDoc).indexOf('The Footer') === -1);
+
+// 9) Independent oracle: word-extractor must still parse the styled .doc AND read
+// the footnote + header we wrote (proves those PLCs are structurally valid, not
 // orphaned text the body parser happens to skip).
 (function () {
   var WordExtractor;
@@ -117,6 +130,9 @@ check('footnote stays out of the body text', docToText(ftnDoc).indexOf('A footno
     return we.extract(Buffer.from(ftnDoc));
   }).then(function (d2) {
     check('word-extractor reads the written footnote (getFootnotes)', (d2.getFootnotes() || '').indexOf('A footnote.') !== -1);
+    return we.extract(Buffer.from(hfDoc));
+  }).then(function (d3) {
+    check('word-extractor reads the written header (getHeaders)', (d3.getHeaders() || '').indexOf('The Header') !== -1);
     done();
   }).catch(function (e) { check('word-extractor cross-check (' + e.message + ')', false); done(); });
 })();

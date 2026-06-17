@@ -319,6 +319,8 @@
     var paras = toParagraphs(input);
     var ftnParas = storyParas(input, 'footnotes');   // footnote-document paragraphs (one per footnote)
     var ftnRefCps = [];                               // body CPs of the footnote-reference chars
+    var hdrParas = storyParas(input, 'header');       // page header paragraphs (odd-page)
+    var ftrParas = storyParas(input, 'footer');       // page footer paragraphs (odd-page)
 
     var wd = cfb.byName['WordDocument'];
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
@@ -464,6 +466,25 @@
       ftnRefCps = ftnRefCps.slice(0, nFtn);
     } else { ftnRefCps = []; }
     var ccpFtn = codes.length - ccpText;
+
+    // ---- Header document: PlcfHdd stories. 0-5 are footnote/endnote separators
+    // (left empty), then per section: even/odd/first header, even/odd/first footer.
+    // We place the header in the odd-page header (story 7) and footer in the odd
+    // footer (story 9), all others empty, plus a trailing paragraph. ccpHdd counts
+    // these; the final PlcfHdd CP carries the observed +2 phantom.
+    var hddStart = codes.length, hddCps = null;
+    if (hdrParas.length || ftrParas.length) {
+      hddCps = [];
+      function emitStoryParas(ps) { for (var i = 0; i < ps.length; i++) { var rs = ps[i].runs || []; for (var j = 0; j < rs.length; j++) if (!rs[j].image && rs[j].ftnRef == null) emitRun(rs[j]); emitMark(0x0D); endPara(PNORMAL); } }
+      for (var hk = 0; hk < 13; hk++) {
+        hddCps.push(codes.length - hddStart);          // start CP of story hk
+        if (hk === 7 && hdrParas.length) emitStoryParas(hdrParas);
+        else if (hk === 9 && ftrParas.length) emitStoryParas(ftrParas);
+        else if (hk === 12) { emitMark(0x0D); endPara(PNORMAL); }   // trailing story
+      }
+      hddCps.push((codes.length - hddStart) + 2);      // lim = ccpHdd + 2 (observed phantom)
+    }
+    var ccpHdd = codes.length - hddStart;
     var ccp = codes.length, textBytes = ccp * 2;
 
     // ---- new WordDocument: skeleton WD + text + CHPX page(s) + PAPX page(s) --
@@ -484,6 +505,7 @@
     var newWd = concat(parts, totalLen);
     u32(newWd, rgLwStart + 3 * 4, ccpText);        // ccpText (body only)
     u32(newWd, rgLwStart + 4 * 4, ccpFtn);         // ccpFtn (footnote document)
+    u32(newWd, rgLwStart + 5 * 4, ccpHdd);         // ccpHdd (header document)
     u32(newWd, rgLwStart + 0 * 4, newWd.length);   // cbMac
 
     // ---- new 1Table: skeleton table + appended CLX / PlcfBteChpx / PlcfBtePapx
@@ -524,7 +546,7 @@
     // PlcffndTxt (#3) = the footnote-document text boundaries.
     var ftnRefBytes = null, ftnTxtBytes = null;
     if (ftnRefCps.length && ftnTxtCps) {
-      var nF = ftnRefCps.length, docEndLim = ccpText + ccpFtn + 1;
+      var nF = ftnRefCps.length, docEndLim = ccp + 1; // one past the last CP across all stories
       ftnRefBytes = new Uint8Array((nF + 1) * 4 + nF * 2);
       for (var rfi = 0; rfi < nF; rfi++) u32(ftnRefBytes, rfi * 4, ftnRefCps[rfi]);
       u32(ftnRefBytes, nF * 4, docEndLim);
@@ -534,6 +556,10 @@
     }
     var ftnRefOff = ftnRefBytes ? append(ftnRefBytes) : -1;
     var ftnTxtOff = ftnTxtBytes ? append(ftnTxtBytes) : -1;
+    // PlcfHdd (#11): the header-document story boundaries (CP array, no data).
+    var hddBytes = null;
+    if (hddCps) { hddBytes = new Uint8Array(hddCps.length * 4); for (var hi = 0; hi < hddCps.length; hi++) u32(hddBytes, hi * 4, hddCps[hi]); }
+    var hddOff = hddBytes ? append(hddBytes) : -1;
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
@@ -547,6 +573,7 @@
     if (fldOff >= 0) setPair(16, fldOff, fldBytes.length); // PlcfFldMom (hyperlink fields)
     if (ftnRefOff >= 0) setPair(2, ftnRefOff, ftnRefBytes.length); // PlcffndRef
     if (ftnTxtOff >= 0) setPair(3, ftnTxtOff, ftnTxtBytes.length); // PlcffndTxt
+    if (hddOff >= 0) setPair(11, hddOff, hddBytes.length); // PlcfHdd (headers/footers)
 
     var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];
     if (dataLen) streams.push({ name: 'Data', data: concat(dataParts, dataLen) });
