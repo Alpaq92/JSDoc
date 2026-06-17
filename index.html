@@ -144,8 +144,8 @@
 </div>
 
 <!-- ?v= cache-buster: bump when the scripts change so browsers refetch them. -->
-<script src="./src/docToText.js?v=4"></script>
-<script src="./src/textToDoc.js?v=2"></script>
+<script src="./src/docToText.js?v=5"></script>
+<script src="./src/textToDoc.js?v=4"></script>
 <script>
 (function () {
   "use strict";
@@ -174,6 +174,7 @@
   var dlHtmlBtn = document.getElementById("dlHtmlBtn");
 
   var lastText = "";
+  var lastModel = null;  // styled paragraph model of the loaded doc, for a formatted .doc round-trip
   var lastName = "document";
   var editReady = false; // becomes true once the Edit view has been populated for the current doc
 
@@ -291,6 +292,10 @@
     }
 
     lastText = plain;
+    // Styled model (runs + table structure) so "Download .doc" can round-trip
+    // the formatting, not just the text.
+    try { lastModel = (docToText.model && docToText.model(buffer) || {}).body || null; }
+    catch (e) { lastModel = null; }
     meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
       '<span class="badge ok">extracted</span> &nbsp;' +
       esc(doc.body.length.toLocaleString()) + " body chars" +
@@ -382,7 +387,11 @@
   // Write a real binary Word .doc from the current text (textToDoc -> Uint8Array).
   // v1 saves body text + paragraphs; styling/tables aren't written back yet.
   document.getElementById("dlDocBtn").addEventListener("click", function () {
-    if (typeof textToDoc === "function") download(lastName + ".doc", "application/msword", textToDoc(currentText()));
+    if (typeof textToDoc !== "function") return;
+    // Unedited loaded doc -> write the styled model (bold/size/colour + tables);
+    // otherwise write the current (edited or plain) text.
+    var src = (!editReady && lastModel) ? lastModel : currentText();
+    download(lastName + ".doc", "application/msword", textToDoc(src));
   });
 
   if (typeof docToText !== "function") {

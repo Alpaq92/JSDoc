@@ -11,8 +11,9 @@
 docToText(input)          // → body text (string), or null if it can't be read
 docToText.sections(input) // → { body, footnotes, headers, … } — text of each story
 docToText.html(input)     // → styled HTML per story (bold/italic/size/colour/font + tables)
+docToText.model(input)    // → { body, … } styled paragraph/run model (feeds the writer)
 docToText.images(input)   // → [{ mime, bytes }] — embedded PNG/JPEG
-textToDoc(text)           // → Uint8Array — write a minimal binary .doc back
+textToDoc(input)          // → Uint8Array — write a .doc back (string or a styled model)
 ```
 
 `docToText` takes an `ArrayBuffer`, `Uint8Array`, or Node `Buffer`; it returns the body text, or `null` when the file is something it won't touch (Word 6/95, encrypted, not a `.doc`, corrupt) — your cue to fall back to a download link. `textToDoc` is the inverse. No GPL code anywhere near it, so the whole thing drops cleanly into a permissive codebase.
@@ -66,16 +67,20 @@ Not handled yet (and where each would slot in):
 
 ## Writing a `.doc`
 
-The reverse direction. **`textToDoc(text)`** ([src/textToDoc.js](src/textToDoc.js)) writes a Word 97–2003 **binary `.doc`** from a string and returns a `Uint8Array` — the inverse of the reader, so `docToText(textToDoc(s)) === s` (plus the required trailing paragraph mark). The demo's **Download .doc** button uses it.
+The reverse direction. **`textToDoc(input)`** ([src/textToDoc.js](src/textToDoc.js)) writes a Word 97–2003 **binary `.doc`** and returns a `Uint8Array`. `input` is either a plain string or a **styled model** from `docToText.model()`, so you can round-trip formatting: `textToDoc(docToText.model(buf).body)`. The demo's **Download .doc** button uses the model, so a loaded document comes back out with its formatting intact.
 
 ```js
 const textToDoc = require('./src/textToDoc.js');
-fs.writeFileSync('out.doc', Buffer.from(textToDoc('Hello\nWorld')));
+const docToText = require('./src/docToText.js');
+fs.writeFileSync('plain.doc', Buffer.from(textToDoc('Hello\nWorld')));        // from text
+fs.writeFileSync('rich.doc',  Buffer.from(textToDoc(docToText.model(buf).body))); // round-trip formatting
 ```
 
-**How, and why it's not from scratch.** A `.doc` synthesised entirely from spec round-trips through lenient parsers but **real word processors reject it** — they require a valid stylesheet, section table, and character/paragraph property tables, and getting every one right blind is the wall (Apache POI doesn't build a `.doc` from scratch either). So the writer **injects** the text into a tiny **bundled blank-document skeleton** — a genuine app-saved empty `.doc`, stripped to its `WordDocument` + `1Table` streams (FIB, stylesheet, sections, fonts), embedded in the module. It reuses those structures and swaps in the body text, piece table, and freshly built CHPX/PAPX property pages. Pass your own blank `.doc` as a second argument to use a different skeleton: `textToDoc(text, myTemplateBytes)`.
+**How, and why it's not from scratch.** A `.doc` synthesised entirely from spec round-trips through lenient parsers but **real word processors reject it** — they require a valid stylesheet, section table, and character/paragraph property tables, and getting every one right blind is the wall (Apache POI doesn't build a `.doc` from scratch either). So the writer **injects** content into a tiny **bundled blank-document skeleton** — a genuine app-saved empty `.doc`, stripped to its `WordDocument` + `1Table` streams (FIB, stylesheet, sections, fonts), embedded in the module. It reuses those structures and swaps in the text, piece table, and freshly built CHPX/PAPX property pages. Pass your own blank `.doc` as a second argument to use a different skeleton: `textToDoc(input, myTemplateBytes)`.
 
-v1 writes **body text + paragraph breaks** (UTF-16) in the Normal style; writing *styling* back is a follow-on. The output is checked three ways: read back by our `docToText` *and* the unrelated `word-extractor` ([test/writer.test.js](test/writer.test.js)), and — since the lenient parsers were exactly the problem — confirmed to **open cleanly in a real word processor** (SoftMaker TextMaker), driven through its COM automation ([scripts/read-with-textmaker.ps1](scripts/read-with-textmaker.ps1)).
+**Writes back:** paragraphs, **character formatting** (bold / italic / underline / strike / size / colour, as CHPX sprms) and **tables** (cell marks + `sprmPFInTable` / `sprmPFTtp` / `sprmTDefTable` with borders). Literal tabs are preserved. **Not yet:** per-run fonts (text uses the Normal style's typeface) and embedded images (the reader extracts them via `docToText.images()`, but the writer doesn't re-embed them).
+
+The output is checked three ways: read back by our `docToText` (`.model()` re-reads the table cells to prove they're real cells, not flattened tabs) *and* the unrelated `word-extractor` ([test/styled.test.js](test/styled.test.js)), and — since the lenient parsers were exactly the problem — confirmed to **open as real bold text and a real table in a word processor** (SoftMaker TextMaker), driven through its COM automation ([scripts/read-with-textmaker.ps1](scripts/read-with-textmaker.ps1)).
 
 ## How it works
 
