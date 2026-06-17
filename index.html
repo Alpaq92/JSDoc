@@ -264,7 +264,9 @@
         try { s += '<img class="docimg" src="' + URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mime })) + '" alt="embedded image">'; } catch (e) { }
       } else if (r.text) {
         var css = runStyle(r);
-        s += css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
+        var inner = css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
+        if (r.url) inner = '<a href="' + esc(r.url) + '" target="_blank" rel="noopener nofollow">' + inner + "</a>";
+        s += inner;
       }
     }
     return s;

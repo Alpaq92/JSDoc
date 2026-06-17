@@ -80,7 +80,19 @@ check('indent/spacing round-trip (left+first-line+before/after+line)',
   !!spPP && spPP.indL === 720 && spPP.ind1 === -360 && spPP.spB === 120 && spPP.spA === 240 && spPP.line === 360);
 check('unspaced paragraph carries no .pp', sp.some(function (p) { return p.runs[0] && p.runs[0].text === 'Plain.' && !p.pp; }));
 
-// 6) Independent oracle: word-extractor must still parse the styled .doc.
+// 6) Hyperlinks: a run with a URL becomes a HYPERLINK field (begin/instruction/
+// separator/result/end, the marks flagged sprmCFSpec, plus a PlcfFldMom). It
+// reads back with the URL on the result run, and the instruction stays hidden.
+var linkDoc = textToDoc([
+  { runs: [{ text: 'See ' }, { text: 'the site', url: 'https://example.com/docs', u: true }, { text: '.' }], kind: 'p' }
+]);
+var lr = null;
+docToText.model(linkDoc).body.forEach(function (p) { (p.runs || []).forEach(function (r) { if (r.url) lr = r; }); });
+check('hyperlink URL round-trips on the result run', !!lr && lr.url === 'https://example.com/docs' && lr.text === 'the site');
+var ltext = docToText(linkDoc);
+check('hyperlink instruction stays hidden from the text', ltext.indexOf('HYPERLINK') === -1 && ltext.replace(/\s+/g, ' ').indexOf('See the site.') !== -1);
+
+// 7) Independent oracle: word-extractor must still parse the styled .doc.
 (function () {
   var WordExtractor;
   try { WordExtractor = require('word-extractor'); }
