@@ -137,7 +137,19 @@ check('all five stories coexist (footnote/endnote/comment/header/footer), body c
   flatText(cm.header).indexOf('hd') !== -1 && flatText(cm.footer).indexOf('ft') !== -1 &&
   docToText(combo).replace(/\s+/g, ' ').indexOf('A B C D.') !== -1);
 
-// 10) Independent oracle: word-extractor must still parse the styled .doc AND read
+// 10) Text box: a body anchor (tbxRef) + box text round-trip via the OfficeArt
+// drawing (TBX_DGG) + FSPA (PlcfspaMom) + PlcftxbxTxt. The box text stays out of
+// the body, and ccpTxbx is stable across repeated round-trips (no growth).
+var tbxDoc = textToDoc({ body: [{ runs: [{ text: 'See ' }, { tbxRef: 0 }, { text: ' box.' }], kind: 'p' }], textboxes: [{ runs: [{ text: 'Boxed' }], kind: 'p' }] });
+var tbm = docToText.model(tbxDoc);
+check('text-box anchor round-trips in the body', tbm.body.some(function (p) { return (p.runs || []).some(function (r) { return r.tbxRef === 0; }); }));
+check('text-box text lands in the textbox story', (docToText.sections(tbxDoc).textboxes || '').indexOf('Boxed') !== -1);
+check('text-box text stays out of the body', docToText(tbxDoc).indexOf('Boxed') === -1);
+var tbRt1 = (docToText.sections(textToDoc(tbm)).textboxes || '').length;
+var tbRt2 = (docToText.sections(textToDoc(docToText.model(textToDoc(tbm)))).textboxes || '').length;
+check('text-box round-trip is stable (ccpTxbx constant)', tbRt1 > 0 && tbRt1 === tbRt2);
+
+// 11) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).
 (function () {

@@ -294,6 +294,7 @@
     if (r.ftnRef != null) return { ftnRef: r.ftnRef };   // footnote-reference anchor (no text)
     if (r.endRef != null) return { endRef: r.endRef };   // endnote-reference anchor (no text)
     if (r.comRef != null) return { comRef: r.comRef };   // comment-reference anchor (no text)
+    if (r.tbxRef != null) return { tbxRef: r.tbxRef };   // text-box (drawn-object) anchor (no text)
     var n = { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
     if (r.url) n.url = String(r.url);
     return n;
@@ -328,6 +329,8 @@
     var comParas = storyParas(input, 'annotations');  // comment (annotation) paragraphs — matches docToText.model().annotations
     if (!comParas.length) comParas = storyParas(input, 'comments'); // friendly alias
     var comRefCps = [];                               // body CPs of the comment-reference chars
+    var tbxParas = storyParas(input, 'textboxes');    // text-box paragraphs (the single box's content)
+    var tbxAnchorCps = [];                            // body CPs of the text-box drawn-object anchors (0x08)
 
     var wd = cfb.byName['WordDocument'];
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
@@ -389,6 +392,7 @@
       if (run.ftnRef != null) return emitFootnoteRef(run);
       if (run.endRef != null) return emitEndnoteRef(run);
       if (run.comRef != null) return emitCommentRef(run);
+      if (run.tbxRef != null) return emitTextboxRef(run);
       if (!run.text) return;
       if (run.url) return emitHyperlink(run);
       var s0 = codes.length;
@@ -406,6 +410,7 @@
     function emitFootnoteRef() { ftnRefCps.push(codes.length); emitSpecial(0x02); }
     function emitEndnoteRef() { ednRefCps.push(codes.length); emitSpecial(0x02); }
     function emitCommentRef() { comRefCps.push(codes.length); emitSpecial(0x05); }
+    function emitTextboxRef() { tbxAnchorCps.push(codes.length); emitSpecial(0x08); }
     // Hyperlink run -> a HYPERLINK field: begin mark (0x13) + a hidden instruction
     // (HYPERLINK "addr") + separator (0x14) + the visible result text + end (0x15).
     // The begin/sep/end positions are recorded for the field PLC (PlcfFldMom) so
@@ -507,6 +512,26 @@
     var ednStart = codes.length;
     var edn = appendNotes(ednParas, ednRefCps); ednRefCps = edn.refCps; var ednTxtCps = edn.txtCps;
     var ccpEdn = codes.length - ednStart;
+
+    // ---- Text-box document: the single box's content + an empty paragraph
+    // (one region) then a trailing mark, mirroring the reference. PlcftxbxTxt
+    // records [0, contentEnd, ccpTxbx]; the shape lives in TBX_DGG, anchored by a
+    // body 0x08 char + an FSPA (PlcfspaMom).
+    var txbxStart = codes.length, tbxTxtCps = null;
+    if (tbxParas.length && tbxAnchorCps.length) {
+      // Strip trailing empty paragraphs (the reader returns the box story with its
+      // structural marks); we re-add a canonical empty + trailing below, so the
+      // round-trip is stable rather than growing ccpTxbx each pass.
+      var content = tbxParas.slice();
+      while (content.length && !(content[content.length - 1].runs || []).some(function (r) { return r.text || r.image; })) content.pop();
+      for (var ti = 0; ti < content.length; ti++) { var trs = content[ti].runs || []; for (var tj = 0; tj < trs.length; tj++) if (!trs[tj].image && trs[tj].tbxRef == null) emitRun(trs[tj]); emitMark(0x0D); endPara(PNORMAL); }
+      emitMark(0x0D); endPara(PNORMAL);                 // empty paragraph closes the box content
+      var tbxContentEnd = codes.length - txbxStart;
+      emitMark(0x0D); endPara(PNORMAL);                 // trailing mark
+      tbxTxtCps = [0, tbxContentEnd, codes.length - txbxStart];
+      tbxAnchorCps = tbxAnchorCps.slice(0, 1);          // the embedded drawing holds one shape
+    } else { tbxAnchorCps = []; }
+    var ccpTxbx = codes.length - txbxStart;
     var ccp = codes.length, textBytes = ccp * 2;
 
     // ---- new WordDocument: skeleton WD + text + CHPX page(s) + PAPX page(s) --
@@ -530,6 +555,7 @@
     u32(newWd, rgLwStart + 5 * 4, ccpHdd);         // ccpHdd (header document)
     u32(newWd, rgLwStart + 7 * 4, ccpAtn);         // ccpAtn (comment document)
     u32(newWd, rgLwStart + 8 * 4, ccpEdn);         // ccpEdn (endnote document)
+    u32(newWd, rgLwStart + 9 * 4, ccpTxbx);        // ccpTxbx (text-box document)
     u32(newWd, rgLwStart + 0 * 4, newWd.length);   // cbMac
 
     // ---- new 1Table: skeleton table + appended CLX / PlcfBteChpx / PlcfBtePapx
@@ -562,8 +588,10 @@
     var clxOff = append(clx), pbteCOff = append(plcfBte(chpx)), pbtePOff = append(plcfBte(papx));
     var pbteC = blocks[1], pbteP = blocks[2];
     var ffnOff = newFfn ? append(newFfn) : -1;
-    var dggBytes = dataLen ? picParts().dgg : null;
-    var dggOff = dggBytes ? append(dggBytes) : -1;   // drawing-group defaults for the pictures
+    // A text box needs the floating-shape drawing (TBX_DGG, which also carries the
+    // group defaults pictures rely on); otherwise pictures use their own defaults.
+    var dggBytes = tbxAnchorCps.length ? b64ToU8(TBX_DGG) : (dataLen ? picParts().dgg : null);
+    var dggOff = dggBytes ? append(dggBytes) : -1;   // OfficeArt drawing (DggInfo)
     var fldBytes = plcfldBytes(fieldMarks);
     var fldOff = fldBytes ? append(fldBytes) : -1;   // PlcfFldMom (hyperlink field positions)
     // Note PLCs (footnotes #2/#3, endnotes #46/#47): refBytes = N body ref CPs +
@@ -602,6 +630,26 @@
     var hddBytes = null;
     if (hddCps) { hddBytes = new Uint8Array(hddCps.length * 4); for (var hi = 0; hi < hddCps.length; hi++) u32(hddBytes, hi * 4, hddCps[hi]); }
     var hddOff = hddBytes ? append(hddBytes) : -1;
+    // Text-box PLCs: PlcfspaMom (#40) = anchor CP + doc-end lim + one FSPA (the
+    // shape id + bounding box); PlcftxbxTxt (#56) = text boundaries + FTXBXS
+    // (lid = shape id); PlcfTxbxBkd (#75) = break descriptors. Values mirror the
+    // one-box reference; the shape itself is the embedded TBX_DGG (spid 1025).
+    var spaOff = -1, txbTxtOff = -1, txbBkdOff = -1, spaLen = 0, txbTxtLen = 0, txbBkdLen = 0;
+    if (tbxAnchorCps.length && tbxTxtCps) {
+      var fspa = new Uint8Array(26);
+      u32(fspa, 0, 1025); u32(fspa, 4, 1746); u32(fspa, 8, 11462); u32(fspa, 12, 4014); u32(fspa, 16, 12074); u16(fspa, 20, 0x4a); u32(fspa, 22, 1);
+      var spa = new Uint8Array(8 + 26); u32(spa, 0, tbxAnchorCps[0]); u32(spa, 4, docEndLim); spa.set(fspa, 8);
+      spaOff = append(spa); spaLen = spa.length;
+      var nc = tbxTxtCps.length, txt = new Uint8Array(nc * 4 + 2 * 22);
+      for (var ci = 0; ci < nc; ci++) u32(txt, ci * 4, tbxTxtCps[ci]);
+      var fb0 = nc * 4; u32(txt, fb0, 1); u32(txt, fb0 + 10, 0xFFFFFFFF); u32(txt, fb0 + 14, 1025); // FTXBXS[0]: cTxbx, reserved=-1, lid
+      u32(txt, fb0 + 22, 0xFFFFFFFF);                                                               // FTXBXS[1]: trailing
+      txbTxtOff = append(txt); txbTxtLen = txt.length;
+      var bkd = new Uint8Array(nc * 4 + 2 * 6);
+      for (ci = 0; ci < nc; ci++) u32(bkd, ci * 4, tbxTxtCps[ci]);
+      var bb = nc * 4; bkd[bb + 5] = 0x08; bkd[bb + 6] = 0xFF; bkd[bb + 7] = 0xFF;                  // BKD[0]=..0x0800, BKD[1]=0xffff..
+      txbBkdOff = append(bkd); txbBkdLen = bkd.length;
+    }
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
@@ -612,6 +660,9 @@
     setPair(13, pbtePOff, pbteP.length); // PlcfBtePapx
     if (ffnOff >= 0) setPair(15, ffnOff, newFfn.length);  // SttbfFfn (grown)
     if (dggOff >= 0) setPair(50, dggOff, dggBytes.length); // fcDggInfo (drawing group)
+    if (spaOff >= 0) setPair(40, spaOff, spaLen);     // PlcfspaMom (shape anchors)
+    if (txbTxtOff >= 0) setPair(56, txbTxtOff, txbTxtLen); // PlcftxbxTxt
+    if (txbBkdOff >= 0) setPair(75, txbBkdOff, txbBkdLen); // PlcfTxbxBkd
     if (fldOff >= 0) setPair(16, fldOff, fldBytes.length); // PlcfFldMom (hyperlink fields)
     if (ftnRefOff >= 0) setPair(2, ftnRefOff, ftnRefBytes.length); // PlcffndRef
     if (ftnTxtOff >= 0) setPair(3, ftnTxtOff, ftnTxtBytes.length); // PlcffndTxt
@@ -640,6 +691,12 @@
   var PIC_FBSE = "YgAH8PK6AAAGBpMLHgABnC5BlDk91UJLk7H/AM66AAABAAAARAAAAAAAAAA=";
   var PIC_BLIP = "AG4e8Ma6AACTCx4AAZwuQZQ5PdVCS5Ox/w==";
   var PIC_DGG = "DwAA8HQBAAAAAAbwGAAAAAEEAAACAAAAAQAAAAEAAAABAAAAAQAAAOMCC/A0AQAABAAAAAAAfwAAAMABgQDoigAAggDoigAAgwDoigAAhADoigAAhQAAAAAAhwAAAAAAiAAAAAAAiQAAAAAAigAAAAAAvwAAAAoAwgACAAAAwwAAACQAxAAAAAEAxcAgAAAA/wAAR///PwEAAAAAfwEAAAAAgAEAAAAAgQH///8AggEAAAEAgwEAAAAAhAEAAAEAiwEAAFoAvwEQABAAwAEAAAAAywGcMQAAzQEAAAAAzgEAAAAA0AEAAAAA0QEAAAAA0gEBAAAA0wEBAAAA1AEBAAAA1QEBAAAA/wEIAAgAPwIAAAIAvwIAAAgA/wIAAAAAPwMAAAAAhAO/XQEAhQO/XQEAhgO/XQEAhwO/XQEAvwMBACMAVABpAG0AZQBzACAATgBlAHcAIABSAG8AbQBhAG4AAABAAB7xEAAAAP//AAAAAP8AgICAAPcAABAADwAC8BABAAAQAAjwCAAAAAEAAAAABAAADwAD8DAAAAAPAATwKAAAAAEACfAQAAAAAAAAAAAAAAAAAAAAAAAAAAIACvAIAAAAAAQAAAUAAAAPAATwwAAAABIACvAIAAAAAQQAAAAMAADDAQvwqAAAAH8AAADAAYEA6IoAAIIA6IoAAIMA6IoAAIQA6IoAAIUAAAAAAIcAAAAAAIgAAAAAAIkAAAAAAIoAAAAAAL8AAAAKAIABAAAAAIEB////AIIBAAABAIMBAAAAAIQBAAABAIsBAAC0AL8BEAAQAP8BAAAIAD8CAAACAL8CAAAIAAQDCQAAAD8DAQABAIQDv10BAIUDv10BAIYDv10BAIcDv10BAL8DAQAjAA==";
+  // Floating text-box drawing (DggInfo): group defaults + one TextBox shape
+  // (spid 1025, ClientTextbox lTxid 0x10000). Reverse-engineered from a one-box
+  // reference (samples/detailed-sample.doc). The shape is fixed; the box's text
+  // lives in the textbox story (PlcftxbxTxt) and the body 0x08 anchor + FSPA
+  // (PlcfspaMom) tie it to a CP. Used verbatim when the model has a text box.
+  var TBX_DGG = "DwAA8HQBAAAAAAbwGAAAAAIEAAACAAAAAgAAAAEAAAABAAAAAgAAAOMCC/A0AQAABAAAAAAAfwAAAMABgQDoigAAggDoigAAgwDoigAAhADoigAAhQAAAAAAhwAAAAAAiAAAAAAAiQAAAAAAigAAAAAAvwACAAoAwgACAAAAwwAAACQAxAAAAAEAxcAgAAAA/wAAR///PwEAAAAAfwEAAAAAgAEAAAAAgQH///8AggEAAAEAgwEAAAAAhAEAAAEAiwEAAFoAvwEQABAAwAEAAAAAywGcMQAAzQEAAAAAzgEAAAAA0AEAAAAA0QEAAAAA0gEBAAAA0wEBAAAA1AEBAAAA1QEBAAAA/wEIAAgAPwIAAAIAvwIAAAgA/wIAAAAAPwMAAAAAhAO/XQEAhQO/XQEAhgO/XQEAhwO/XQEAvwMBACMAVABpAG0AZQBzACAATgBlAHcAIABSAG8AbQBhAG4AAABAAB7xEAAAAP//AAAAAP8AgICAAPcAABAADwAC8FoBAAAQAAjwCAAAAAIAAAABBAAADwAD8EIBAAAPAATwKAAAAAEACfAQAAAAAAAAAAAAAAAAAAAAAAAAAAIACvAIAAAAAAQAAAUAAAAPAATwCgEAAKIMCvAIAAAAAQQAAAAKAABzAQvwqAAAAAQAAAAAAH8AAADAAYAAAAABAIEA6IoAAIIA6IoAAIMA6IoAAIQA6IoAAIUAAAAAAIcAAAAAAIgAAAAAAIkAAAAAAIoAAAAAAL8AAgAKAL8BAAAQAP8BAAAIAD8CAAACAL8CAAAIAIDDHgAAAIQDv10BAIUDv10BAIYDv10BAIcDv10BAL8DAQAjAFAAbwBsAGUAIAB0AGUAawBzAHQAbwB3AGUAMQAAAFMAIvEeAAAAjwMAAAAAkAMBAAAAkQMAAAAAkgMBAAAAvwMAAACAAAAQ8AQAAAAAAAAAAAAR8AQAAAABAAAAAAAN8AQAAAAAAAEA";
 
   // Bundled blank-document skeleton (a real, app-saved empty .doc, stripped to
   // its WordDocument + 1Table streams) that textToDoc() injects text into by
