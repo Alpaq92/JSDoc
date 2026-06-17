@@ -320,6 +320,48 @@
     return s.split('\n').map(function (line) { return { runs: line ? [normRun({ text: line })] : [], kind: 'p' }; });
   }
 
+  // The \x05SummaryInformation stream: an [MS-OLEPS] property set holding document
+  // properties (title/subject/author/keywords/comments). Layout: a 28-byte header,
+  // one 20-byte FMTID+offset entry, then the property set — size, count, a
+  // (propId, offset) table, and the 4-byte-aligned values. PID 1 declares the code
+  // page (1252) so the VT_LPSTR strings decode correctly. Returns null if empty.
+  var SUMMARY_FMTID = [0xE0, 0x85, 0x9F, 0xF2, 0xF9, 0x4F, 0x68, 0x10, 0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9];
+  function summaryInfoStream(props) {
+    if (!props || typeof props !== 'object') return null;
+    var items = [{ pid: 1, val: [0x02, 0, 0, 0, 0xE4, 0x04] }];   // PID_CODEPAGE: VT_I2 = 1252
+    var map = [[2, 'title'], [3, 'subject'], [4, 'author'], [5, 'keywords'], [6, 'comments']];
+    for (var m = 0; m < map.length; m++) {
+      var v = props[map[m][1]];
+      if (v == null || !String(v).length) continue;
+      var s = String(v), enc = [];
+      for (var c = 0; c < s.length; c++) { var cc = s.charCodeAt(c); enc.push(cc < 0x100 ? cc : 0x3F); }   // cp1252; '?' for non-Latin
+      enc.push(0);                                    // null terminator
+      var val = [0x1E, 0, 0, 0, enc.length & 0xFF, (enc.length >> 8) & 0xFF, (enc.length >> 16) & 0xFF, (enc.length >> 24) & 0xFF].concat(enc);
+      items.push({ pid: map[m][0], val: val });       // VT_LPSTR
+    }
+    if (items.length === 1) return null;              // only the code page -> nothing to write
+
+    var n = items.length, tableLen = 8 + n * 8, offsets = [], valBytes = [], pos = tableLen;
+    for (var i = 0; i < n; i++) {
+      while (pos % 4) { valBytes.push(0); pos++; }     // each value starts 4-byte aligned
+      offsets.push(pos);
+      for (var b = 0; b < items[i].val.length; b++) { valBytes.push(items[i].val[b]); pos++; }
+    }
+    var out = [0xFE, 0xFF, 0, 0, 0, 0, 0, 0];          // byte order 0xFFFE + version 0 + OS id 0
+    for (i = 0; i < 16; i++) out.push(0);              // CLSID
+    out.push(1, 0, 0, 0);                              // one property set
+    for (i = 0; i < 16; i++) out.push(SUMMARY_FMTID[i]);
+    out.push(48, 0, 0, 0);                             // offset to the property set (28 + 20)
+    out.push(pos & 0xFF, (pos >> 8) & 0xFF, (pos >> 16) & 0xFF, (pos >> 24) & 0xFF);   // property-set size
+    out.push(n & 0xFF, (n >> 8) & 0xFF, 0, 0);         // property count
+    for (i = 0; i < n; i++) {
+      out.push(items[i].pid & 0xFF, (items[i].pid >> 8) & 0xFF, 0, 0);
+      out.push(offsets[i] & 0xFF, (offsets[i] >> 8) & 0xFF, (offsets[i] >> 16) & 0xFF, (offsets[i] >> 24) & 0xFF);
+    }
+    for (i = 0; i < valBytes.length; i++) out.push(valBytes[i]);
+    return Uint8Array.from(out);
+  }
+
   function textToDoc(input, template) {
     var cfb = readCfb(template || defaultTemplate());
     if (!cfb) throw new Error('template is not a valid .doc (CFB) file');
@@ -697,6 +739,11 @@
 
     var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];
     if (dataLen) streams.push({ name: 'Data', data: concat(dataParts, dataLen) });
+    // Document properties (title/author/...) as a \x05SummaryInformation property set.
+    if (input && !Array.isArray(input) && input.props) {
+      var si = summaryInfoStream(input.props);
+      if (si) streams.push({ name: '\x05SummaryInformation', data: si });
+    }
     return buildCfb(streams);
   }
 

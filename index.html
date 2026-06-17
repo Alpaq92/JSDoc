@@ -80,6 +80,8 @@
   /* A text box: a floated bordered box holding its content, where it's anchored. */
   .docbox { float: left; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; margin: 2px 14px 6px 0; background: rgba(127,127,127,.06); max-width: 260px; }
   .docbox p { margin: 0; }
+  /* Document properties (title/author/...) as a quiet metadata bar above the body. */
+  .docprops { font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 12px; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -400,6 +402,12 @@
     // inside would get hoisted out by the browser.
     tbxBoxHtml = (hasTbx && model && model.textboxes) ? model.textboxes.filter(function (p) { return (p.runs || []).some(function (r) { return r.text || r.image; }); }).map(function (p) { return runsHtml(p.runs); }).join("<br>") : "";
     var plain = doc.body, html = (model && model.body) ? renderModel(model.body) : toHtml(doc.html.body, true), extras = [];
+    // Document properties (title/author/...) as a small metadata bar above the body.
+    if (model && model.props) {
+      var mp = model.props, bits = [];
+      [["title", "Title"], ["author", "Author"], ["subject", "Subject"], ["keywords", "Keywords"], ["comments", "Comments"]].forEach(function (f) { if (mp[f[0]]) bits.push("<b>" + f[1] + ":</b> " + esc(mp[f[0]])); });
+      if (bits.length) html = '<div class="docprops">' + bits.join(" &nbsp;·&nbsp; ") + "</div>" + html;
+    }
     for (var s = 0; s < STORIES.length; s++) {
       var key = STORIES[s][0], v = doc[key];
       if (key === "textboxes" && hasTbx) continue;   // shown inline at its anchor instead
