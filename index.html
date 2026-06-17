@@ -281,9 +281,9 @@
       } else if (r.comRef != null) {
         s += '<sup class="comref" title="comment ' + (r.comRef + 1) + '">✎</sup>';
       } else if (r.tbxRef != null) {
-        // Render the text box where it's anchored, as a floated bordered box
-        // holding its content (it sits at the left in the document).
-        s += '<span class="docbox" title="text box ' + (r.tbxRef + 1) + '">' + (tbxBoxHtml || "&nbsp;") + "</span>";
+        // A floating text box isn't inline — it's drawn as a floated box at the top
+        // of the body (see show()), independent of where its anchor falls in the
+        // text, so it doesn't end up glued to whatever the anchor sits beside.
       } else if (r.text) {
         var css = runStyle(r);
         var inner = css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
@@ -402,6 +402,10 @@
     // inside would get hoisted out by the browser.
     tbxBoxHtml = (hasTbx && model && model.textboxes) ? model.textboxes.filter(function (p) { return (p.runs || []).some(function (r) { return r.text || r.image; }); }).map(function (p) { return runsHtml(p.runs); }).join("<br>") : "";
     var plain = doc.body, html = (model && model.body) ? renderModel(model.body) : toHtml(doc.html.body, true), extras = [];
+    // A floating text box floats at the top-left of the body and the text flows past
+    // it (a centred image stays centred) — matching how an editor places it, rather
+    // than gluing it to whatever its text anchor happens to sit next to.
+    if (tbxBoxHtml) html = '<div class="docbox" title="floating text box">' + tbxBoxHtml + "</div>" + html;
     // Document properties (title/author/...) as a small metadata bar above the body.
     if (model && model.props) {
       var mp = model.props, bits = [];
