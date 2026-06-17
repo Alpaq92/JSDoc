@@ -117,9 +117,28 @@ check('header round-trips into the header document', flatText(hfm.header).indexO
 check('footer round-trips into the header document', flatText(hfm.footer).indexOf('The Footer') !== -1);
 check('header/footer stay out of the body', docToText(hfDoc).indexOf('The Header') === -1 && docToText(hfDoc).indexOf('The Footer') === -1);
 
-// 9) Independent oracle: word-extractor must still parse the styled .doc AND read
-// the footnote + header we wrote (proves those PLCs are structurally valid, not
-// orphaned text the body parser happens to skip).
+// 9) Endnotes (a near-clone of footnotes) + coexistence: a body endnote anchor +
+// endnote text round-trip (ccpEdn + PlcfendRef/PlcfendTxt), kept distinct from
+// footnotes, and a single doc carries footnote + endnote + header + footer at once.
+var combo = textToDoc({
+  body: [{ runs: [{ text: 'A' }, { ftnRef: 0 }, { text: ' B' }, { endRef: 0 }, { text: ' C.' }], kind: 'p' }],
+  footnotes: [{ runs: [{ text: ' fn' }], kind: 'p' }],
+  endnotes: [{ runs: [{ text: ' en' }], kind: 'p' }],
+  header: [{ runs: [{ text: 'hd' }], kind: 'p' }],
+  footer: [{ runs: [{ text: 'ft' }], kind: 'p' }]
+});
+var cm = docToText.model(combo);
+function hasRef(body, key, v) { return body.some(function (p) { return (p.runs || []).some(function (r) { return r[key] === v; }); }); }
+check('endnote anchor round-trips, distinct from footnote', hasRef(cm.body, 'endRef', 0) && hasRef(cm.body, 'ftnRef', 0));
+check('endnote text lands in the endnote story', (docToText.sections(combo).endnotes || '').indexOf('en') !== -1);
+check('footnote + endnote + header + footer coexist, body clean',
+  flatText(cm.footnotes).indexOf('fn') !== -1 && flatText(cm.endnotes).indexOf('en') !== -1 &&
+  flatText(cm.header).indexOf('hd') !== -1 && flatText(cm.footer).indexOf('ft') !== -1 &&
+  docToText(combo).replace(/\s+/g, ' ').indexOf('A B C.') !== -1);
+
+// 10) Independent oracle: word-extractor must still parse the styled .doc AND read
+// the footnote + header + endnote we wrote (proves those PLCs are structurally
+// valid, not orphaned text the body parser happens to skip).
 (function () {
   var WordExtractor;
   try { WordExtractor = require('word-extractor'); }
@@ -133,6 +152,9 @@ check('header/footer stay out of the body', docToText(hfDoc).indexOf('The Header
     return we.extract(Buffer.from(hfDoc));
   }).then(function (d3) {
     check('word-extractor reads the written header (getHeaders)', (d3.getHeaders() || '').indexOf('The Header') !== -1);
+    return we.extract(Buffer.from(combo));
+  }).then(function (d4) {
+    check('word-extractor reads the written endnote (getEndnotes)', (d4.getEndnotes() || '').indexOf('en') !== -1);
     done();
   }).catch(function (e) { check('word-extractor cross-check (' + e.message + ')', false); done(); });
 })();
