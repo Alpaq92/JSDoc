@@ -231,6 +231,19 @@
   // runs their character styling, images appear INLINE where they belong (so a
   // centred image stays centred), lists become <ul>/<ol>, tables a <table>.
   var ALIGN = ["", "center", "right", "justify"];
+  // Paragraph spacing/indentation (model .pp, in twips) -> CSS. 20 twips = 1pt.
+  // Line spacing: a multiple (lineMult set, 240=single) or an absolute pt value.
+  function ppCss(pp) {
+    if (!pp) return "";
+    var c = "";
+    if (pp.indL) c += "margin-left:" + (pp.indL / 20) + "pt;";
+    if (pp.indR) c += "margin-right:" + (pp.indR / 20) + "pt;";
+    if (pp.ind1) c += "text-indent:" + (pp.ind1 / 20) + "pt;";
+    if (pp.spB) c += "margin-top:" + (pp.spB / 20) + "pt;";
+    if (pp.spA) c += "margin-bottom:" + (pp.spA / 20) + "pt;";
+    if (pp.line) c += "line-height:" + (pp.lineMult ? (pp.line / 240) : (Math.abs(pp.line) / 20) + "pt") + ";";
+    return c;
+  }
   function runStyle(r) {
     var css = "";
     if (r.b) css += "font-weight:bold;";
@@ -270,13 +283,17 @@
         }
         html += "</tbody></table>";
       } else {
-        var al = p.align ? ' style="text-align:' + ALIGN[p.align] + '"' : "";
+        var alignCss = p.align ? "text-align:" + ALIGN[p.align] + ";" : "";
         var inner = runsHtml(p.runs);
         if (p.list) {
           var tag = p.list.kind === "number" ? "ol" : "ul";
           if (listTag !== tag) { closeList(); html += "<" + tag + ">"; listTag = tag; }
-          html += "<li" + al + ">" + (inner || "&nbsp;") + "</li>";
-        } else { closeList(); html += "<p" + al + ">" + (inner || "<br>") + "</p>"; }
+          html += "<li" + (alignCss ? ' style="' + alignCss + '"' : "") + ">" + (inner || "&nbsp;") + "</li>";
+        } else {
+          closeList();
+          var st = alignCss + ppCss(p.pp);  // alignment + spacing/indentation
+          html += "<p" + (st ? ' style="' + st + '"' : "") + ">" + (inner || "<br>") + "</p>";
+        }
         i++;
       }
     }

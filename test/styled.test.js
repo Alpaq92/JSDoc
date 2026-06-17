@@ -67,7 +67,20 @@ var lm = docToText.model(listDoc).body.filter(function (p) { return p.list; });
 check('lists round-trip (3 list paragraphs, with level)', lm.length === 3 && lm[1].list.ilvl === 1);
 check('bullet list detected', lm[0].list.kind === 'bullet');
 
-// 5) Independent oracle: word-extractor must still parse the styled .doc.
+// 5) Paragraph spacing & indentation: left/right/first-line indent, space
+// before/after, and line spacing (twips) survive as PAPX sprms; an unspaced
+// paragraph stays bare (no .pp).
+var spaced = textToDoc([
+  { runs: [{ text: 'Indented, spaced, 1.5 line.' }], kind: 'p', pp: { indL: 720, ind1: -360, spB: 120, spA: 240, line: 360, lineMult: 1 } },
+  { runs: [{ text: 'Plain.' }], kind: 'p' }
+]);
+var sp = docToText.model(spaced).body;
+var spPP = (sp.filter(function (p) { return p.pp; })[0] || {}).pp;
+check('indent/spacing round-trip (left+first-line+before/after+line)',
+  !!spPP && spPP.indL === 720 && spPP.ind1 === -360 && spPP.spB === 120 && spPP.spA === 240 && spPP.line === 360);
+check('unspaced paragraph carries no .pp', sp.some(function (p) { return p.runs[0] && p.runs[0].text === 'Plain.' && !p.pp; }));
+
+// 6) Independent oracle: word-extractor must still parse the styled .doc.
 (function () {
   var WordExtractor;
   try { WordExtractor = require('word-extractor'); }
