@@ -64,6 +64,11 @@
   }
   #edit { outline: none; }
   #edit:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+  /* "Document colours": render the Formatted view as a white page so the .doc's
+     own colours (incl. default black text) show, instead of the dark theme. */
+  #rich.paper { background: #fff; color: #1a1a1a; }
+  .paperchk { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 12px 12px; font-size: 13px; color: var(--muted); cursor: pointer; vertical-align: middle; }
+  .paperchk.hidden { display: none; }
   #rich p, #edit p { margin: 0 0 10px; }
   #rich p:last-child, #edit p:last-child { margin-bottom: 0; }
   #rich h3.sec, #edit h3.sec { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -121,6 +126,9 @@
       <button id="viewText" type="button">Plain text</button>
       <button id="viewEdit" type="button">Edit</button>
     </div>
+    <label class="paperchk hidden" id="paperWrap" title="Show the document's own colours on a white page, instead of the app theme">
+      <input type="checkbox" id="paperChk" checked> Document colours
+    </label>
     <div id="rich" class="hidden"></div>
     <pre id="out" class="hidden"></pre>
     <div id="edit" class="hidden" contenteditable="true" spellcheck="false"></div>
@@ -144,8 +152,8 @@
 </div>
 
 <!-- ?v= cache-buster: bump when the scripts change so browsers refetch them. -->
-<script src="./src/docToText.js?v=5"></script>
-<script src="./src/textToDoc.js?v=4"></script>
+<script src="./src/docToText.js?v=6"></script>
+<script src="./src/textToDoc.js?v=5"></script>
 <script>
 (function () {
   "use strict";
@@ -167,6 +175,10 @@
   var viewRich = document.getElementById("viewRich");
   var viewText = document.getElementById("viewText");
   var viewEdit = document.getElementById("viewEdit");
+  var paperWrap = document.getElementById("paperWrap");
+  var paperChk = document.getElementById("paperChk");
+  function applyPaper() { rich.classList.toggle("paper", paperChk.checked); }
+  paperChk.addEventListener("change", applyPaper);
   var edit = document.getElementById("edit");
   var actions = document.getElementById("actions");
   var copyBtn = document.getElementById("copyBtn");
@@ -303,9 +315,11 @@
       (imgs.length ? " · " + imgs.length + " image" + (imgs.length > 1 ? "s" : "") : "");
     fallback.classList.add("hidden");
     rich.innerHTML = html;
+    applyPaper();
     out.textContent = plain.length ? plain : "(document contains no main-body text)";
     editReady = false; edit.innerHTML = ""; // fresh edit buffer per document
     viewtoggle.classList.remove("hidden");
+    paperWrap.classList.remove("hidden");
     setView("rich");
     actions.classList.remove("hidden");
   }

@@ -14,10 +14,12 @@
  * swap in the body text + piece table + freshly built CHPX/PAPX FKP pages.
  * Clean-room from [MS-CFB] (container) + [MS-DOC] (FIB / CLX / FKP / sprms).
  *
- * Writes back: paragraphs, character formatting (bold/italic/underline/strike/
- * size/colour/font as CHPX sprms — fonts the skeleton lacks are appended to its
- * SttbfFfn) and tables (cell marks + sprmPFInTable / sprmPFTtp / sprmTDefTable
- * with borders). Not yet: embedded images.
+ * Writes back: paragraphs with alignment (sprmPJc), character formatting (bold/
+ * italic/underline/strike/size/colour/font as CHPX sprms — fonts the skeleton
+ * lacks are appended to its SttbfFfn), tables (cell marks + sprmPFInTable /
+ * sprmPFTtp / sprmTDefTable with borders), and inline images (PNG/JPEG as an
+ * OfficeArt picture in a Data stream, sized + placed). Not yet: lists/numbering,
+ * paragraph spacing/indentation, hyperlink URLs.
  *
  * Verification: round-tripped through docToText (.model re-reads the table
  * cells) AND the independent word-extractor (test/styled.test.js / writer.test.js),
@@ -193,6 +195,40 @@
     return u;
   }
 
+  // ---- inline pictures -----------------------------------------------------
+  // Replicates SoftMaker TextMaker's own inline-picture layout (reverse-engineered
+  // from a reference doc): in the Data stream, a PICF (mm=0x64) + OfficeArt
+  // SpContainer (picture-frame shape + OPT + anchor) + an inline FBSE whose blip
+  // (msofbtBlipPNG/JPEG) holds rgbUid(16) + tag(1) + the image bytes. The drawing
+  // group defaults (DggInfo) go in the table stream at FibRgFcLcb #50. A 0x01
+  // picture char in the text carries sprmCFSpec + sprmCPicLocation (Data offset).
+  var _pic = null;
+  function picParts() { return _pic || (_pic = { picf: b64ToU8(PIC_PICF), sp: b64ToU8(PIC_SP), fbse: b64ToU8(PIC_FBSE), blip: b64ToU8(PIC_BLIP), dgg: b64ToU8(PIC_DGG) }); }
+  function imgDims(b) {
+    if (b[0] === 0x89) return { w: (b[16] * 0x1000000 + (b[17] << 16) + (b[18] << 8) + b[19]), h: (b[20] * 0x1000000 + (b[21] << 16) + (b[22] << 8) + b[23]) };
+    if (b[0] === 0xFF && b[1] === 0xD8) for (var p = 2; p + 9 < b.length;) { if (b[p] !== 0xFF) { p++; continue; } var m = b[p + 1]; if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return { h: (b[p + 5] << 8) | b[p + 6], w: (b[p + 7] << 8) | b[p + 8] }; p += 2 + ((b[p + 2] << 8) | b[p + 3]); }
+    return null;
+  }
+  // Bytes for one picture in the Data stream (PICF + SpContainer + FBSE + blip).
+  function imagePart(img) {
+    var M = picParts(), bytes = img.bytes, n = bytes.length;
+    var isJpeg = /jpe?g/i.test(img.mime || '') || (bytes[0] === 0xFF && bytes[1] === 0xD8);
+    var picf = M.picf.slice(), sp = M.sp, fbse = M.fbse.slice(), blip = M.blip.slice();
+    if (isJpeg) { u16(blip, 0, 0x46A << 4); u16(blip, 2, 0xF01D); fbse[8] = fbse[9] = 5; } // msofbtBlipJPEG / btWin32=JPEG
+    u32(blip, 4, 17 + n);                 // blip recLen = rgbUid(16) + tag(1) + image
+    u32(fbse, 4, 61 + n);                 // FBSE recLen = 36 fields + 8 blip header + 17 + n
+    u32(fbse, 28, 25 + n);                // FBSE.size = blip record (8 + 17 + n)
+    u32(fbse, 36, 0);                     // FBSE.foDelay = 0 (blip is inline)
+    var lcb = 68 + sp.length + 8 + (61 + n);
+    u32(picf, 0, lcb);
+    // Display size: prefer the original's PICF dimensions (img.dxa/dya twips);
+    // otherwise derive from the image's own pixels (15 twips/px @96dpi, capped).
+    var w = img.dxa, h = img.dya, dim = imgDims(bytes);
+    if (!(w > 0 && h > 0) && dim && dim.w && dim.h) { w = Math.min(Math.round(dim.w * 15), 9000); h = Math.round(w * dim.h / dim.w); }
+    if (w > 0 && h > 0) { u16(picf, 0x1C, w); u16(picf, 0x1E, h); u16(picf, 0x20, 1000); u16(picf, 0x22, 1000); }
+    return concat([picf, sp, fbse, blip, bytes], lcb);
+  }
+
   // A PapxInFkp (cb=0 form): [0][cb'][GrpPrlAndIstd], where GrpPrlAndIstd is
   // istd (2 bytes, 0 = Normal) + grpprl, zero-padded to 2*cb' bytes.
   function papxInFkp(grpprl) {
@@ -253,11 +289,12 @@
   // Normalise input to model paragraphs. Accepts a plain string, an array of
   // model paragraphs, or a docToText.model() story ({ body: [...] }).
   function normRun(r) {
+    if (r.image && r.image.bytes) return { image: r.image };
     return { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
   }
   function toParagraphs(input) {
     if (input && !Array.isArray(input) && Array.isArray(input.body)) input = input.body;
-    if (Array.isArray(input)) return input.map(function (p) { return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p' }; });
+    if (Array.isArray(input)) return input.map(function (p) { return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0 }; });
     var s = String(input == null ? '' : input).replace(/\r\n?|\n/g, '\n');
     return s.split('\n').map(function (line) { return { runs: line ? [normRun({ text: line })] : [], kind: 'p' }; });
   }
@@ -283,6 +320,8 @@
     var PNORMAL = papxInFkp([]);
     var PCELL = papxInFkp(SPRM_FINTABLE);
     function papxTtp(ncols) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols))); }
+    // Normal paragraph with optional alignment (sprmPJc80: 0 left/1 centre/2 right/3 justify).
+    function papxP(align) { return align ? papxInFkp([0x03, 0x24, align & 0xFF]) : PNORMAL; }
 
     // Font table: reuse the skeleton's fonts, append any the model introduces,
     // and reference each run's font via sprmCRgFtc0. (If the skeleton has no
@@ -310,16 +349,27 @@
     }
     function emitMark(code) { codes.push(code); chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: null }); }
     function endPara(blob) { papxParas.push({ s: paraStart, e: codes.length, blob: blob }); paraStart = codes.length; }
+    // Inline pictures: append the picture bytes to the Data stream and emit a
+    // 0x01 char whose CHPX points at it (sprmCPicLocation) and marks it special.
+    var dataParts = [], dataLen = 0;
+    function emitImage(img) {
+      if (!img || !img.bytes || !img.bytes.length) return;
+      var off = dataLen, part = imagePart(img); dataParts.push(part); dataLen += part.length;
+      codes.push(0x01);
+      var g = []; sprm(g, 0x6A03, [off, off >> 8, off >> 16, off >> 24]); sprm(g, 0x0855, [1]); // sprmCPicLocation + sprmCFSpec
+      var blob = new Uint8Array(g.length + 1); blob[0] = g.length; blob.set(g, 1);
+      chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: blob });
+    }
     var cellsInRow = 0;
     for (var pi = 0; pi < paras.length; pi++) {
       var par = paras[pi];
-      for (var ri = 0; ri < par.runs.length; ri++) emitRun(par.runs[ri]);
+      for (var ri = 0; ri < par.runs.length; ri++) { var run = par.runs[ri]; if (run.image) emitImage(run.image); else emitRun(run); }
       if (par.kind === 'cell') { emitMark(0x07); endPara(PCELL); cellsInRow++; }
       else if (par.kind === 'rowEnd') {
         emitMark(0x07); endPara(PCELL); cellsInRow++;       // final cell of the row
         emitMark(0x07); endPara(papxTtp(cellsInRow));       // empty row-terminator paragraph
         cellsInRow = 0;
-      } else { emitMark(0x0D); endPara(PNORMAL); cellsInRow = 0; }  // normal paragraph
+      } else { emitMark(0x0D); endPara(papxP(par.align)); cellsInRow = 0; }  // normal paragraph (with alignment)
     }
     if (!codes.length || codes[codes.length - 1] !== 0x0D) { emitMark(0x0D); endPara(PNORMAL); }
     var ccp = codes.length, textBytes = ccp * 2;
@@ -360,6 +410,8 @@
     var clxOff = append(clx), pbteCOff = append(plcfBte(chpx)), pbtePOff = append(plcfBte(papx));
     var pbteC = blocks[1], pbteP = blocks[2];
     var ffnOff = newFfn ? append(newFfn) : -1;
+    var dggBytes = dataLen ? picParts().dgg : null;
+    var dggOff = dggBytes ? append(dggBytes) : -1;   // drawing-group defaults for the pictures
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
@@ -368,15 +420,28 @@
     setPair(33, clxOff, clx.length);     // Clx
     setPair(12, pbteCOff, pbteC.length); // PlcfBteChpx
     setPair(13, pbtePOff, pbteP.length); // PlcfBtePapx
-    if (ffnOff >= 0) setPair(15, ffnOff, newFfn.length); // SttbfFfn (grown)
+    if (ffnOff >= 0) setPair(15, ffnOff, newFfn.length);  // SttbfFfn (grown)
+    if (dggOff >= 0) setPair(50, dggOff, dggBytes.length); // fcDggInfo (drawing group)
 
-    return buildCfb([{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }]);
+    var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];
+    if (dataLen) streams.push({ name: 'Data', data: concat(dataParts, dataLen) });
+    return buildCfb(streams);
   }
 
   function concat(arrs, len) { var out = new Uint8Array(len), p = 0; arrs.forEach(function (a) { out.set(a, p); p += a.length; }); return out; }
 
   textToDoc.readCfb = readCfb;   // exposed for tests/tools
   textToDoc.buildCfb = buildCfb; // exposed for tooling (building the skeleton)
+
+  // Image-independent inline-picture machinery, reverse-engineered from a
+  // TextMaker-saved reference (see scripts/embed-template.js notes): the PICF,
+  // the OfficeArt SpContainer, the FBSE header+fields, the blip header
+  // (msofbtBlipPNG + rgbUid + tag), and the drawing-group defaults (DggInfo).
+  var PIC_PICF = "JLwAAEQAZADAA8ADAAAAAAAAAAAAAAAAAAAAAEA4QDiqAKoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  var PIC_SP = "DwAE8N4AAACyBArwCAAAAAEEAAAACgAA8wEL8LoAAAAEAAAAAAB/AIABwAGBAAAAAACCAAAAAACDAAAAAACEAAAAAACFAAAAAACHAAAAAACIAAAAAACJAAAAAACKAAAAAAC/AAAACgAAAQAAAAABAQAAAAACAQAAAAADAQAAAAAEQQEAAAAIAQAAAQAJAQAAAAAKAQAAAQA/AQAABgC/AQAAEAD/AQAACAA/AgAAAgC/AgAACAA/AwgACACEAwAAAACFAwAAAACGAwAAAACHAwAAAAC/AyEAIwAAABDwBAAAAAAAAIA=";
+  var PIC_FBSE = "YgAH8PK6AAAGBpMLHgABnC5BlDk91UJLk7H/AM66AAABAAAARAAAAAAAAAA=";
+  var PIC_BLIP = "AG4e8Ma6AACTCx4AAZwuQZQ5PdVCS5Ox/w==";
+  var PIC_DGG = "DwAA8HQBAAAAAAbwGAAAAAEEAAACAAAAAQAAAAEAAAABAAAAAQAAAOMCC/A0AQAABAAAAAAAfwAAAMABgQDoigAAggDoigAAgwDoigAAhADoigAAhQAAAAAAhwAAAAAAiAAAAAAAiQAAAAAAigAAAAAAvwAAAAoAwgACAAAAwwAAACQAxAAAAAEAxcAgAAAA/wAAR///PwEAAAAAfwEAAAAAgAEAAAAAgQH///8AggEAAAEAgwEAAAAAhAEAAAEAiwEAAFoAvwEQABAAwAEAAAAAywGcMQAAzQEAAAAAzgEAAAAA0AEAAAAA0QEAAAAA0gEBAAAA0wEBAAAA1AEBAAAA1QEBAAAA/wEIAAgAPwIAAAIAvwIAAAgA/wIAAAAAPwMAAAAAhAO/XQEAhQO/XQEAhgO/XQEAhwO/XQEAvwMBACMAVABpAG0AZQBzACAATgBlAHcAIABSAG8AbQBhAG4AAABAAB7xEAAAAP//AAAAAP8AgICAAPcAABAADwAC8BABAAAQAAjwCAAAAAEAAAAABAAADwAD8DAAAAAPAATwKAAAAAEACfAQAAAAAAAAAAAAAAAAAAAAAAAAAAIACvAIAAAAAAQAAAUAAAAPAATwwAAAABIACvAIAAAAAQQAAAAMAADDAQvwqAAAAH8AAADAAYEA6IoAAIIA6IoAAIMA6IoAAIQA6IoAAIUAAAAAAIcAAAAAAIgAAAAAAIkAAAAAAIoAAAAAAL8AAAAKAIABAAAAAIEB////AIIBAAABAIMBAAAAAIQBAAABAIsBAAC0AL8BEAAQAP8BAAAIAD8CAAACAL8CAAAIAAQDCQAAAD8DAQABAIQDv10BAIUDv10BAIYDv10BAIcDv10BAL8DAQAjAA==";
 
   // Bundled blank-document skeleton (a real, app-saved empty .doc, stripped to
   // its WordDocument + 1Table streams) that textToDoc() injects text into by
