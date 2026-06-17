@@ -149,7 +149,15 @@ var tbRt1 = (docToText.sections(textToDoc(tbm)).textboxes || '').length;
 var tbRt2 = (docToText.sections(textToDoc(docToText.model(textToDoc(tbm)))).textboxes || '').length;
 check('text-box round-trip is stable (ccpTxbx constant)', tbRt1 > 0 && tbRt1 === tbRt2);
 
-// 11) Independent oracle: word-extractor must still parse the styled .doc AND read
+// 11) Page setup: margins + page size round-trip via the first section's SEPX
+// (sprmSDyaTop/Bottom, sprmSDxaLeft/Right, sprmSXaPage/SYaPage). Twips.
+var pgDoc = textToDoc({ body: [{ runs: [{ text: 'P.' }], kind: 'p' }], page: { top: 1440, bottom: 1440, left: 1800, right: 1800, width: 12240, height: 15840 } });
+var pgm = docToText.model(pgDoc).page;
+// All six values differ from the skeleton's A4/1417 defaults, so this fails unless
+// the writer actually applied input.page.
+check('page setup round-trips (margins + page size)', !!pgm && pgm.top === 1440 && pgm.bottom === 1440 && pgm.left === 1800 && pgm.right === 1800 && pgm.width === 12240 && pgm.height === 15840);
+
+// 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).
 (function () {
