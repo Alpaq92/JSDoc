@@ -35,15 +35,15 @@ check('hand-built: colour', /color:rgb\(86,\s*52,\s*18\)/.test(html));   // 0x12
 check('hand-built: font (appended to table)', /font-family:'Courier New'/.test(html));
 check('hand-built: text intact', docToText(out).replace(/\r?\n/g, ' ').indexOf('Title plain italic under struck') !== -1);
 
-// 2) Round-trip the license sample's styled model; tables must come back as tables.
-var lic = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'license-comparison.doc'))).body;
-var doc2 = textToDoc(lic);
+// 2) Round-trip the bundled sample's styled model; tables must come back as tables.
+var sample = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'detailed-sample.doc'))).body;
+var doc2 = textToDoc(sample);
 var html2 = docToText.html(doc2).body;
-check('license: bold preserved', /font-weight:bold/.test(html2));
-check('license: colour preserved', /color:rgb/.test(html2));
+check('sample: bold preserved', /font-weight:bold/.test(html2));
+check('sample: colour preserved', /color:rgb/.test(html2));
 var re = docToText.model(doc2).body, kinds = {};
 re.forEach(function (p) { kinds[p.kind] = (kinds[p.kind] || 0) + 1; });
-check('license: table cells round-trip (real 0x07 cells, not tabs)', kinds.cell > 0 && kinds.rowEnd > 0);
+check('sample: table cells round-trip (real 0x07 cells, not tabs)', kinds.cell > 0 && kinds.rowEnd > 0);
 
 // 3) Inline image + paragraph alignment round-trip. A 1x1 PNG in a centred
 // paragraph: the image must embed (and read back) and the alignment survive.
@@ -73,7 +73,7 @@ check('bullet list detected', lm[0].list.kind === 'bullet');
   try { WordExtractor = require('word-extractor'); }
   catch (e) { console.log('\n  skip word-extractor cross-check (not installed)'); return done(); }
   new WordExtractor().extract(Buffer.from(doc2)).then(function (d) {
-    check('word-extractor parses the styled .doc', d.getBody().indexOf('GPL') !== -1);
+    check('word-extractor parses the styled .doc', d.getBody().indexOf('Lorem') !== -1);
     done();
   }).catch(function (e) { check('word-extractor parses the styled .doc (' + e.message + ')', false); done(); });
 })();

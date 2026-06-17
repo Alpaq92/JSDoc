@@ -106,6 +106,6 @@ npm run test:oracle # compares against word-extractor on real .doc files
 
 [`0BSD`](LICENSE) — public-domain-equivalent, no attribution required, so it can live anywhere.
 
-`word-extractor` (MIT) is a dev-only test dependency and isn't part of the shipped code. The demo's sample, [`samples/license-comparison.doc`](samples/license-comparison.doc), is a renamed copy of `test03.doc` from word-extractor (MIT, © 2016–2021 Stuart Watt) — permissive, so it doesn't affect the `0BSD` license of the extractor.
+The demo's bundled sample, [`samples/detailed-sample.doc`](samples/detailed-sample.doc), is a small document exercising the reader's range — styled text, a bullet list, a table, and an embedded image — with public-domain Lorem Ipsum filler text. `word-extractor` (MIT) is a dev-only test dependency (the oracle in `test/oracle.test.js`) and isn't part of the shipped code.
 
-The writer's skeleton, [`samples/blank-template.doc`](samples/blank-template.doc) — an empty document saved by SoftMaker FreeOffice, stripped to its `WordDocument` + `1Table` streams and embedded into the writer via [`scripts/embed-template.js`](scripts/embed-template.js) — is a structural empty document with no authored content, so it carries no copyrightable expression.
+The writer's **skeleton** (a structural empty `.doc`) and **inline-picture machinery** are reverse-engineered from blank/one-image documents saved by a real word processor (SoftMaker FreeOffice), reduced to their structural bytes and embedded into `src/textToDoc.js` as base64. They carry no authored content, so no copyrightable expression — and the source documents aren't bundled. [`scripts/embed-template.js`](scripts/embed-template.js) regenerates the skeleton embed from such a blank `.doc`.

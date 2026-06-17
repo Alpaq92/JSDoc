@@ -3,17 +3,21 @@
  * embed-template.js — (re)generate the blank-document skeleton embedded in
  * src/textToDoc.js as TEMPLATE_B64.
  *
- * The skeleton is samples/blank-template.doc: a real, app-saved empty .doc
- * stripped to just the two streams the writer reuses (WordDocument + 1Table —
- * which carry the FIB, stylesheet, section table and fonts). It contains no
- * document text; textToDoc() injects the body into it. Run after replacing the
- * skeleton:  node scripts/embed-template.js
+ * The skeleton is a real, app-saved empty .doc stripped to just the two streams
+ * the writer reuses (WordDocument + 1Table — FIB, stylesheet, section table,
+ * fonts, list definitions). It has no authored content; textToDoc() injects the
+ * body into it. The source isn't bundled in the repo (only the embedded base64
+ * is shipped) — pass a blank .doc to regenerate:
+ *   node scripts/embed-template.js path/to/blank.doc
+ * (textToDoc.buildCfb can strip a full blank .doc to the two streams first.)
  */
 var fs = require('fs');
 var path = require('path');
 
 var root = path.join(__dirname, '..');
-var skeleton = fs.readFileSync(path.join(root, 'samples', 'blank-template.doc'));
+var srcDoc = process.argv[2];
+if (!srcDoc) { console.error('usage: node scripts/embed-template.js path/to/blank.doc'); process.exit(1); }
+var skeleton = fs.readFileSync(srcDoc);
 var b64 = Buffer.from(skeleton).toString('base64');
 
 var file = path.join(root, 'src', 'textToDoc.js');
