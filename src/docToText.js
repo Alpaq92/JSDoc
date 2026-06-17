@@ -399,11 +399,25 @@
     function paraAlign(fc) { var r = papx ? runAt(papx, fc) : null; return r ? (r.jc || 0) : 0; }
     var listKind = parseListNfc(tableBytes, fibRgFcLcbStart, dv);
     function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
+    // Paragraph spacing/indentation (twips): left/right/first-line indent, space
+    // before/after, and line spacing (LSPD: line + lineMult flag). Only non-zero
+    // values are returned, so an unspaced paragraph stays a bare model node.
+    function paraPP(fc) {
+      var r = papx ? runAt(papx, fc) : null; if (!r) return null;
+      var pp = {};
+      if (r.indL) pp.indL = r.indL;
+      if (r.indR) pp.indR = r.indR;
+      if (r.ind1) pp.ind1 = r.ind1;
+      if (r.spB) pp.spB = r.spB;
+      if (r.spA) pp.spA = r.spA;
+      if (r.line) { pp.line = r.line; pp.lineMult = r.lineMult || 0; }
+      return Object.keys(pp).length ? pp : null;
+    }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP);
     }
     return doc;
   }
@@ -687,13 +701,14 @@
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
       var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
+      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0;
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
           var cb = wd[papx];                             // GrpPrlAndIstd starts at:
           var g = cb !== 0 ? papx + 1 : papx + 2;        // cb!=0 -> +1, else +2
           if (g + 2 <= pageOff + 512) istd = wd[g] | (wd[g + 1] << 8);
-          // walk the grpprl (after the istd) for alignment + list membership
+          // walk the grpprl (after the istd) for alignment, list, spacing/indent
           var grpEnd = cb !== 0 ? papx + 2 * cb : papx + 2 + 2 * (wd[papx + 1] || 0);
           if (grpEnd > pageOff + 512) grpEnd = pageOff + 512;
           for (var gp = g + 2; gp + 2 <= grpEnd;) {
@@ -701,11 +716,17 @@
             if (sc === 0x2403 || sc === 0x2461) jc = wd[gp + 2];        // sprmPJc80 / sprmPJc
             else if (sc === 0x460B) ilfo = wd[gp + 2] | (wd[gp + 3] << 8); // sprmPIlfo (list)
             else if (sc === 0x260A) ilvl = wd[gp + 2];                     // sprmPIlvl (level)
+            else if (sc === 0x840F) indL = dv.getInt16(gp + 2, true);      // sprmPDxaLeft
+            else if (sc === 0x840E) indR = dv.getInt16(gp + 2, true);      // sprmPDxaRight
+            else if (sc === 0x8411) ind1 = dv.getInt16(gp + 2, true);      // sprmPDxaLeft1 (first line; <0 = hanging)
+            else if (sc === 0xA413) spB = dv.getInt16(gp + 2, true);       // sprmPDyaBefore
+            else if (sc === 0xA414) spA = dv.getInt16(gp + 2, true);       // sprmPDyaAfter
+            else if (sc === 0x6412) { line = dv.getInt16(gp + 2, true); lineMult = wd[gp + 4] | (wd[gp + 5] << 8); } // sprmPDyaLine (LSPD)
             gp += 2 + ol; if (ol <= 0) break;
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult });
     }
   }
 
@@ -873,7 +894,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
     function props(p) {
@@ -883,7 +904,7 @@
     }
     function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color; }
     function flushRun() { if (buf) { runs.push({ text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }); buf = ''; } }
-    function endPara(kind, fc) { flushRun(); paras.push({ runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }); runs = []; curKey = null; curProps = null; }
+    function endPara(kind, fc) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; paras.push(par); runs = []; curKey = null; curProps = null; }
     function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
     function feed(code, fc) {
       if (code === 0x13) { flushCells(); fieldStack.push(true); return; }

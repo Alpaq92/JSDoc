@@ -299,7 +299,7 @@
       // List paragraphs map to the skeleton's built-in LFOs: bullet -> ilfo 2,
       // number -> ilfo 1. (Or pass ilfo/ilvl directly.)
       var li = p.list, ilfo = li ? (li.kind === 'number' ? 1 : 2) : (p.ilfo || 0), ilvl = li ? (li.ilvl || 0) : (p.ilvl || 0);
-      return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl };
+      return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl, pp: p.pp || null };
     });
     var s = String(input == null ? '' : input).replace(/\r\n?|\n/g, '\n');
     return s.split('\n').map(function (line) { return { runs: line ? [normRun({ text: line })] : [], kind: 'p' }; });
@@ -333,6 +333,18 @@
       var g = [];
       if (par.ilfo) { g.push(0x0A, 0x26, par.ilvl & 0xFF); g.push(0x0B, 0x46, par.ilfo & 0xFF, (par.ilfo >> 8) & 0xFF); }
       if (par.align) g.push(0x03, 0x24, par.align & 0xFF);
+      // Spacing/indentation (twips): each sprm carries a signed 16-bit operand
+      // (first-line indent and "exact" line spacing can be negative).
+      var pp = par.pp;
+      if (pp) {
+        function s16(lo, hi, v) { g.push(lo, hi, v & 0xFF, (v >> 8) & 0xFF); }
+        if (pp.indL) s16(0x0F, 0x84, pp.indL);                 // sprmPDxaLeft
+        if (pp.indR) s16(0x0E, 0x84, pp.indR);                 // sprmPDxaRight
+        if (pp.ind1) s16(0x11, 0x84, pp.ind1);                 // sprmPDxaLeft1 (first line / hanging)
+        if (pp.spB) s16(0x13, 0xA4, pp.spB);                   // sprmPDyaBefore
+        if (pp.spA) s16(0x14, 0xA4, pp.spA);                   // sprmPDyaAfter
+        if (pp.line) { g.push(0x12, 0x64, pp.line & 0xFF, (pp.line >> 8) & 0xFF, pp.lineMult & 0xFF, (pp.lineMult >> 8) & 0xFF); } // sprmPDyaLine (LSPD)
+      }
       return g.length ? papxInFkp(g) : PNORMAL;
     }
 
