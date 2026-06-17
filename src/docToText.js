@@ -380,6 +380,9 @@
       if (styles && p.istd != null && styles[p.istd]) { s = styles[p.istd]; for (k in s) out[k] = s[k]; }
       for (k in p) if (k !== 'istd') out[k] = p[k];     // direct run props win
       if (fonts && out.ftc != null && fonts[out.ftc]) out.font = fonts[out.ftc];
+      // An explicit RGB (sprmCCv) wins; otherwise fall back to the 16-colour
+      // palette index (sprmCIco) so both the styled HTML and the model see it.
+      if ((out.cv == null || (out.cv & 0xFFFFFF) === 0) && out.ico >= 2 && out.ico <= 16 && ICO_CV[out.ico]) out.cv = ICO_CV[out.ico];
       return out;
     } : null;
 
@@ -896,6 +899,11 @@
   // Old Word 16-colour palette for sprmCIco (0=auto, 1=black -> default text).
   var ICO_PALETTE = ['', '', 'blue', 'cyan', 'lime', 'magenta', 'red', 'yellow',
     'white', 'navy', 'teal', 'green', 'purple', 'maroon', 'olive', 'gray', 'silver'];
+  // The same 16-colour palette as COLORREF ints (0x00BBGGRR) for the paragraph
+  // model, so a model run carries an ico colour the same way it carries an sprmCCv
+  // one. Indices 0/1 (auto/black) stay 0 = "default text colour, don't store".
+  var ICO_CV = [0, 0, 0xFF0000, 0xFFFF00, 0x00FF00, 0xFF00FF, 0x0000FF, 0x00FFFF,
+    0xFFFFFF, 0x800000, 0x808000, 0x008000, 0x800080, 0x000080, 0x008080, 0x808080, 0xC0C0C0];
 
   function escHtml(s) {
     return s.replace(/[&<>]/g, function (c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; });
