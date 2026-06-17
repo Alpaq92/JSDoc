@@ -672,6 +672,25 @@
     if (atnTxtOff >= 0) setPair(5, atnTxtOff, atnTxtBytes.length); // PlcfandTxt
     if (hddOff >= 0) setPair(11, hddOff, hddBytes.length); // PlcfHdd (headers/footers)
 
+    // Page setup: patch the first section's SEPX (in the WordDocument) in place
+    // from input.page — margins (sprmSDyaTop 0x9023 / Bottom 0x9024 / sprmSDxaLeft
+    // 0xB021 / Right 0xB022) and page size (sprmSXaPage 0xB01F / sprmSYaPage 0xB020),
+    // all twips. Patching values keeps the skeleton's other section sprms intact.
+    if (input && input.page && pairLcb(6) >= 16) {
+      var pg = input.page, sTdv = new DataView(newTbl.buffer, newTbl.byteOffset, newTbl.byteLength);
+      var sN = (pairLcb(6) - 4) / 16, sepx = sTdv.getUint32(pairFc(6) + (sN + 1) * 4 + 2, true);
+      if (sepx > 0 && sepx + 2 < newWd.length) {
+        var pmap = { 0x9023: pg.top, 0x9024: pg.bottom, 0xB021: pg.left, 0xB022: pg.right, 0xB01F: pg.width, 0xB020: pg.height };
+        var scb = newWd[sepx] | (newWd[sepx + 1] << 8), sg = sepx + 2, send = sepx + 2 + scb;
+        while (sg + 2 <= send && sg + 2 <= newWd.length) {
+          var ss = newWd[sg] | (newWd[sg + 1] << 8), ssa = (ss >> 13) & 7;
+          var sol = ssa <= 1 ? 1 : (ssa === 2 || ssa === 4 || ssa === 5) ? 2 : ssa === 3 ? 4 : ssa === 7 ? 3 : (1 + (newWd[sg + 2] || 0));
+          if (pmap[ss] != null) u16(newWd, sg + 2, pmap[ss] & 0xFFFF);
+          sg += 2 + sol; if (sol <= 0) break;
+        }
+      }
+    }
+
     var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];
     if (dataLen) streams.push({ name: 'Data', data: concat(dataParts, dataLen) });
     return buildCfb(streams);

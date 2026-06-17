@@ -441,6 +441,9 @@
       if (hK >= 0) doc.model.header = grab(hK);
       if (fK >= 0) doc.model.footer = grab(fK);
     }
+    // Page setup: the first section's properties (margins, page size, orientation).
+    var page = parseSection(tableBytes, fibRgFcLcbStart, dv, wd);
+    if (page) doc.model.page = page;
     return doc;
   }
 
@@ -781,6 +784,37 @@
       var n = Math.floor(lcb / 4), dv = new DataView(table.buffer, table.byteOffset, table.byteLength), cps = [];
       for (var i = 0; i < n; i++) cps.push(dv.getUint32(fc + i * 4, true));
       return cps;
+    } catch (e) { return null; }
+  }
+
+  // First section's page setup from its SEPX (a grpprl of section sprms): margins
+  // (sprmSDyaTop 0x9023 / sprmSDyaBottom 0x9024 signed; sprmSDxaLeft 0xB021 /
+  // sprmSDxaRight 0xB022), page size (sprmSXaPage 0xB01F / sprmSYaPage 0xB020),
+  // orientation (sprmSBOrientation 0x301D). Twips. Only set fields appear.
+  function parseSection(table, fibStart, fibDv, wd) {
+    try {
+      var sedFc = fibDv.getUint32(fibStart + 6 * 8, true), sedLcb = fibDv.getUint32(fibStart + 6 * 8 + 4, true);
+      if (sedLcb < 16) return null;
+      var n = Math.floor((sedLcb - 4) / 16);
+      if (n < 1) return null;
+      var tdv = new DataView(table.buffer, table.byteOffset, table.byteLength);
+      var fcSepx = tdv.getUint32(sedFc + (n + 1) * 4 + 2, true);   // first SED.fcSepx (offset 2 in the 12-byte SED)
+      if (fcSepx === 0xFFFFFFFF || fcSepx + 2 > wd.length) return null;
+      var wdv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
+      var cb = wdv.getUint16(fcSepx, true), g = fcSepx + 2, end = fcSepx + 2 + cb, p = {};
+      while (g + 2 <= end && g + 4 <= wd.length) {
+        var sprm = wdv.getUint16(g, true), spra = (sprm >> 13) & 7;
+        var opLen = spra <= 1 ? 1 : (spra === 2 || spra === 4 || spra === 5) ? 2 : spra === 3 ? 4 : spra === 7 ? 3 : (1 + (wd[g + 2] || 0));
+        if (sprm === 0x9023) p.top = wdv.getInt16(g + 2, true);
+        else if (sprm === 0x9024) p.bottom = wdv.getInt16(g + 2, true);
+        else if (sprm === 0xB021) p.left = wdv.getUint16(g + 2, true);
+        else if (sprm === 0xB022) p.right = wdv.getUint16(g + 2, true);
+        else if (sprm === 0xB01F) p.width = wdv.getUint16(g + 2, true);
+        else if (sprm === 0xB020) p.height = wdv.getUint16(g + 2, true);
+        else if (sprm === 0x301D) p.landscape = wd[g + 2] === 2;
+        g += 2 + opLen; if (opLen <= 0) break;
+      }
+      return Object.keys(p).length ? p : null;
     } catch (e) { return null; }
   }
 
