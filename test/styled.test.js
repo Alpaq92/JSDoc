@@ -218,6 +218,13 @@ check('keep-with-next round-trips (sprmPFKeepFollow)', !!kb[0].pp && kb[0].pp.ke
 check('keep-together + page-break-before round-trip', !!kb[1].pp && kb[1].pp.keepLines === 1 && kb[1].pp.pageBreak === 1);
 check('a plain paragraph carries no keep/break flags', kb[2].pp == null);
 
+// 17) Floating-shape positions: the reader exposes each text box's FSPA bounding box
+// (page coordinates, twips) as model.shapes, so the demo can place it where the
+// document actually puts it rather than at its text anchor.
+var shp = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'detailed-sample.doc'))).shapes;
+check('text-box FSPA position is exposed (model.shapes)',
+  Array.isArray(shp) && shp.length === 1 && shp[0].xL > 0 && shp[0].yT > 0 && shp[0].xR > shp[0].xL && shp[0].yB > shp[0].yT);
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).

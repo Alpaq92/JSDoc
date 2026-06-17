@@ -456,6 +456,9 @@
     // Document properties (title/author/...) from the \x05SummaryInformation stream.
     var props = parseSummaryInfo(cfb);
     if (props) doc.model.props = props;
+    // Floating-shape (text-box) positions, so the demo can place them on the page.
+    var shapes = parseShapes(tableBytes, fibRgFcLcbStart, dv);
+    if (shapes) doc.model.shapes = shapes;
     return doc;
   }
 
@@ -838,6 +841,26 @@
         if (str) out[names[pid]] = str;
       }
       return Object.keys(out).length ? out : null;
+    } catch (e) { return null; }
+  }
+
+  // Floating-shape positions from PlcfspaMom (FibRgFcLcb #40): each shape's FSPA
+  // bounding box (xaLeft/yaTop/xaRight/yaBottom in twips) plus its anchor CP, so the
+  // demo can place a text box where the document actually puts it on the page rather
+  // than at its text anchor. PLC layout: N+1 CPs (4 bytes) then N FSPA records (26).
+  function parseShapes(table, fibStart, fibDv) {
+    try {
+      var fc = fibDv.getUint32(fibStart + 40 * 8, true), lcb = fibDv.getUint32(fibStart + 40 * 8 + 4, true);
+      if (lcb < 4 + 26 || fc < 0 || fc + lcb > table.length) return null;
+      var n = Math.floor((lcb - 4) / 30);
+      if (n < 1) return null;
+      var dv = new DataView(table.buffer, table.byteOffset, table.byteLength), base = fc + (n + 1) * 4, shapes = [];
+      for (var i = 0; i < n; i++) {
+        var o = base + i * 26;
+        if (o + 26 > table.length) break;
+        shapes.push({ cp: dv.getUint32(fc + i * 4, true), xL: dv.getInt32(o + 4, true), yT: dv.getInt32(o + 8, true), xR: dv.getInt32(o + 12, true), yB: dv.getInt32(o + 16, true) });
+      }
+      return shapes.length ? shapes : null;
     } catch (e) { return null; }
   }
 
