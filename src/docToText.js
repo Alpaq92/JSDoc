@@ -397,11 +397,13 @@
     var dataEntry = cfb.byName['Data'], dataStream = null;
     try { dataStream = dataEntry ? cfb.getStream(dataEntry) : null; } catch (e) { }
     function paraAlign(fc) { var r = papx ? runAt(papx, fc) : null; return r ? (r.jc || 0) : 0; }
+    var listKind = parseListNfc(tableBytes, fibRgFcLcbStart, dv);
+    function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList);
     }
     return doc;
   }
@@ -684,25 +686,54 @@
       var a = dv.getUint32(pageOff + i * 4, true);
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
-      var bOff = wd[bxBase + i * 13], istd = 0, jc = 0;  // BxPap.bOffset; jc = alignment
+      var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
           var cb = wd[papx];                             // GrpPrlAndIstd starts at:
           var g = cb !== 0 ? papx + 1 : papx + 2;        // cb!=0 -> +1, else +2
           if (g + 2 <= pageOff + 512) istd = wd[g] | (wd[g + 1] << 8);
-          // walk the grpprl (after the istd) for sprmPJc (paragraph alignment)
+          // walk the grpprl (after the istd) for alignment + list membership
           var grpEnd = cb !== 0 ? papx + 2 * cb : papx + 2 + 2 * (wd[papx + 1] || 0);
           if (grpEnd > pageOff + 512) grpEnd = pageOff + 512;
           for (var gp = g + 2; gp + 2 <= grpEnd;) {
             var sc = wd[gp] | (wd[gp + 1] << 8), ol = sprmOperandLen(sc, wd, gp + 2);
-            if ((sc === 0x2403 || sc === 0x2461) && gp + 2 < grpEnd) jc = wd[gp + 2]; // sprmPJc80 / sprmPJc
+            if (sc === 0x2403 || sc === 0x2461) jc = wd[gp + 2];        // sprmPJc80 / sprmPJc
+            else if (sc === 0x460B) ilfo = wd[gp + 2] | (wd[gp + 3] << 8); // sprmPIlfo (list)
+            else if (sc === 0x260A) ilvl = wd[gp + 2];                     // sprmPIlvl (level)
             gp += 2 + ol; if (ol <= 0) break;
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl });
     }
+  }
+
+  // PlfLst (FibRgFcLcb #73) + PlfLfo (#74) -> ilfo (1-based) -> 'bullet'|'number'
+  // from each list's level-0 number format (nfc: 23 = bullet; 0-22 = decimal/
+  // roman/letters). Best-effort: missing/unreadable LVLs default to bullet.
+  function parseListNfc(table, fibStart, fibDv) {
+    try {
+      var lstFc = fibDv.getUint32(fibStart + 73 * 8, true), lstLcb = fibDv.getUint32(fibStart + 73 * 8 + 4, true);
+      var lfoFc = fibDv.getUint32(fibStart + 74 * 8, true), lfoLcb = fibDv.getUint32(fibStart + 74 * 8 + 4, true);
+      if (!lstLcb || !lfoLcb || lstFc + lstLcb > table.length || lfoFc + lfoLcb > table.length) return null;
+      var dv = new DataView(table.buffer, table.byteOffset, table.byteLength);
+      var cLst = dv.getUint16(lstFc, true), p = lstFc + 2, lsts = [];
+      for (var i = 0; i < cLst; i++) { lsts.push({ lsid: dv.getInt32(p, true), simple: table[p + 26] & 1 }); p += 28; }
+      var nfcByLsid = {};
+      for (i = 0; i < cLst && p + 28 <= lstFc + lstLcb; i++) {
+        var nLvl = lsts[i].simple ? 1 : 9;
+        for (var lv = 0; lv < nLvl && p + 28 <= lstFc + lstLcb; lv++) {
+          if (lv === 0) nfcByLsid[lsts[i].lsid] = table[p + 4];
+          var cchOff = p + 28 + table[p + 25] + table[p + 24];
+          var cch = cchOff + 2 <= table.length ? dv.getUint16(cchOff, true) : 0;
+          p = cchOff + 2 + cch * 2;
+        }
+      }
+      var cLfo = dv.getUint32(lfoFc, true), q = lfoFc + 4, kind = {};
+      for (i = 0; i < cLfo && q + 16 <= lfoFc + lfoLcb; i++) { var nfc = nfcByLsid[dv.getInt32(q, true)]; kind[i + 1] = (nfc != null && nfc < 23) ? 'number' : 'bullet'; q += 16; }
+      return kind;
+    } catch (e) { return null; }
   }
 
   // Extract the text of one CP range [lo, hi): the body uses [0, ccpText) and
@@ -842,7 +873,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
     function props(p) {
@@ -852,7 +883,7 @@
     }
     function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color; }
     function flushRun() { if (buf) { runs.push({ text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }); buf = ''; } }
-    function endPara(kind, fc) { flushRun(); paras.push({ runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0 }); runs = []; curKey = null; curProps = null; }
+    function endPara(kind, fc) { flushRun(); paras.push({ runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }); runs = []; curKey = null; curProps = null; }
     function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
     function feed(code, fc) {
       if (code === 0x13) { flushCells(); fieldStack.push(true); return; }

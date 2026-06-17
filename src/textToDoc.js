@@ -14,12 +14,13 @@
  * swap in the body text + piece table + freshly built CHPX/PAPX FKP pages.
  * Clean-room from [MS-CFB] (container) + [MS-DOC] (FIB / CLX / FKP / sprms).
  *
- * Writes back: paragraphs with alignment (sprmPJc), character formatting (bold/
- * italic/underline/strike/size/colour/font as CHPX sprms — fonts the skeleton
- * lacks are appended to its SttbfFfn), tables (cell marks + sprmPFInTable /
- * sprmPFTtp / sprmTDefTable with borders), and inline images (PNG/JPEG as an
- * OfficeArt picture in a Data stream, sized + placed). Not yet: lists/numbering,
- * paragraph spacing/indentation, hyperlink URLs.
+ * Writes back: paragraphs with alignment (sprmPJc) and lists (bullet/numbered
+ * with nesting, via sprmPIlfo/sprmPIlvl against the skeleton's built-in list
+ * definitions), character formatting (bold/italic/underline/strike/size/colour/
+ * font as CHPX sprms — fonts the skeleton lacks are appended to its SttbfFfn),
+ * tables (cell marks + sprmPFInTable / sprmPFTtp / sprmTDefTable with borders),
+ * and inline images (PNG/JPEG as an OfficeArt picture in a Data stream, sized +
+ * placed). Not yet: paragraph spacing/indentation, hyperlink URLs.
  *
  * Verification: round-tripped through docToText (.model re-reads the table
  * cells) AND the independent word-extractor (test/styled.test.js / writer.test.js),
@@ -294,7 +295,12 @@
   }
   function toParagraphs(input) {
     if (input && !Array.isArray(input) && Array.isArray(input.body)) input = input.body;
-    if (Array.isArray(input)) return input.map(function (p) { return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0 }; });
+    if (Array.isArray(input)) return input.map(function (p) {
+      // List paragraphs map to the skeleton's built-in LFOs: bullet -> ilfo 2,
+      // number -> ilfo 1. (Or pass ilfo/ilvl directly.)
+      var li = p.list, ilfo = li ? (li.kind === 'number' ? 1 : 2) : (p.ilfo || 0), ilvl = li ? (li.ilvl || 0) : (p.ilvl || 0);
+      return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl };
+    });
     var s = String(input == null ? '' : input).replace(/\r\n?|\n/g, '\n');
     return s.split('\n').map(function (line) { return { runs: line ? [normRun({ text: line })] : [], kind: 'p' }; });
   }
@@ -320,8 +326,15 @@
     var PNORMAL = papxInFkp([]);
     var PCELL = papxInFkp(SPRM_FINTABLE);
     function papxTtp(ncols) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols))); }
-    // Normal paragraph with optional alignment (sprmPJc80: 0 left/1 centre/2 right/3 justify).
-    function papxP(align) { return align ? papxInFkp([0x03, 0x24, align & 0xFF]) : PNORMAL; }
+    // Normal paragraph PAPX with optional list membership (sprmPIlvl 0x260A +
+    // sprmPIlfo 0x460B, referencing the skeleton's list tables) and alignment
+    // (sprmPJc80 0x2403: 0 left / 1 centre / 2 right / 3 justify).
+    function papxForP(par) {
+      var g = [];
+      if (par.ilfo) { g.push(0x0A, 0x26, par.ilvl & 0xFF); g.push(0x0B, 0x46, par.ilfo & 0xFF, (par.ilfo >> 8) & 0xFF); }
+      if (par.align) g.push(0x03, 0x24, par.align & 0xFF);
+      return g.length ? papxInFkp(g) : PNORMAL;
+    }
 
     // Font table: reuse the skeleton's fonts, append any the model introduces,
     // and reference each run's font via sprmCRgFtc0. (If the skeleton has no
@@ -369,7 +382,7 @@
         emitMark(0x07); endPara(PCELL); cellsInRow++;       // final cell of the row
         emitMark(0x07); endPara(papxTtp(cellsInRow));       // empty row-terminator paragraph
         cellsInRow = 0;
-      } else { emitMark(0x0D); endPara(papxP(par.align)); cellsInRow = 0; }  // normal paragraph (with alignment)
+      } else { emitMark(0x0D); endPara(papxForP(par)); cellsInRow = 0; }  // normal paragraph (alignment + list)
     }
     if (!codes.length || codes[codes.length - 1] !== 0x0D) { emitMark(0x0D); endPara(PNORMAL); }
     var ccp = codes.length, textBytes = ccp * 2;
