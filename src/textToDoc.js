@@ -291,18 +291,24 @@
   // model paragraphs, or a docToText.model() story ({ body: [...] }).
   function normRun(r) {
     if (r.image && r.image.bytes) return { image: r.image };
+    if (r.ftnRef != null) return { ftnRef: r.ftnRef };   // footnote-reference anchor (no text)
     var n = { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
     if (r.url) n.url = String(r.url);
     return n;
   }
+  // One model paragraph -> a normalized writer paragraph. List paragraphs map to
+  // the skeleton's built-in LFOs: bullet -> ilfo 2, number -> ilfo 1.
+  function mapPara(p) {
+    var li = p.list, ilfo = li ? (li.kind === 'number' ? 1 : 2) : (p.ilfo || 0), ilvl = li ? (li.ilvl || 0) : (p.ilvl || 0);
+    return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl, pp: p.pp || null };
+  }
+  // Non-body stories from a model object (the footnotes array, etc.), mapped.
+  function storyParas(input, key) {
+    return (input && !Array.isArray(input) && Array.isArray(input[key])) ? input[key].map(mapPara) : [];
+  }
   function toParagraphs(input) {
     if (input && !Array.isArray(input) && Array.isArray(input.body)) input = input.body;
-    if (Array.isArray(input)) return input.map(function (p) {
-      // List paragraphs map to the skeleton's built-in LFOs: bullet -> ilfo 2,
-      // number -> ilfo 1. (Or pass ilfo/ilvl directly.)
-      var li = p.list, ilfo = li ? (li.kind === 'number' ? 1 : 2) : (p.ilfo || 0), ilvl = li ? (li.ilvl || 0) : (p.ilvl || 0);
-      return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl, pp: p.pp || null };
-    });
+    if (Array.isArray(input)) return input.map(mapPara);
     var s = String(input == null ? '' : input).replace(/\r\n?|\n/g, '\n');
     return s.split('\n').map(function (line) { return { runs: line ? [normRun({ text: line })] : [], kind: 'p' }; });
   }
@@ -311,6 +317,8 @@
     var cfb = readCfb(template || defaultTemplate());
     if (!cfb) throw new Error('template is not a valid .doc (CFB) file');
     var paras = toParagraphs(input);
+    var ftnParas = storyParas(input, 'footnotes');   // footnote-document paragraphs (one per footnote)
+    var ftnRefCps = [];                               // body CPs of the footnote-reference chars
 
     var wd = cfb.byName['WordDocument'];
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
@@ -369,12 +377,22 @@
     // paragraph; every cell/terminator paragraph is flagged in-table.
     var codes = [], chpxRuns = [], papxParas = [], paraStart = 0;
     function emitRun(run) {
+      if (run.ftnRef != null) return emitFootnoteRef(run);
       if (!run.text) return;
       if (run.url) return emitHyperlink(run);
       var s0 = codes.length;
       for (var i = 0; i < run.text.length; i++) codes.push(run.text.charCodeAt(i));
       chpxRuns.push({ s: s0, e: codes.length, blob: chpxBlob(run, ftcFor(run.font)) });
     }
+    // Emit a "special" character (sprmCFSpec) — used for the footnote auto-number
+    // / reference char (0x02), which editors treat as a live mark, not a glyph.
+    function emitSpecial(code) {
+      codes.push(code);
+      var g = []; sprm(g, 0x0855, [1]); // sprmCFSpec
+      var blob = new Uint8Array(g.length + 1); blob[0] = g.length; blob.set(g, 1);
+      chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: blob });
+    }
+    function emitFootnoteRef() { ftnRefCps.push(codes.length); emitSpecial(0x02); }
     // Hyperlink run -> a HYPERLINK field: begin mark (0x13) + a hidden instruction
     // (HYPERLINK "addr") + separator (0x14) + the visible result text + end (0x15).
     // The begin/sep/end positions are recorded for the field PLC (PlcfFldMom) so
@@ -425,6 +443,27 @@
       } else { emitMark(0x0D); endPara(papxForP(par)); cellsInRow = 0; }  // normal paragraph (alignment + list)
     }
     if (!codes.length || codes[codes.length - 1] !== 0x0D) { emitMark(0x0D); endPara(PNORMAL); }
+    var ccpText = codes.length;   // body ends here; non-body stories follow in CP space
+
+    // ---- Footnote document: one paragraph per footnote, each [0x02 ref][text][0x0D],
+    // then a trailing paragraph mark. ccpFtn counts these; PlcffndTxt records the
+    // text boundaries and PlcffndRef the body reference positions + an FRD each.
+    var ftnTxtCps = null;
+    if (ftnParas.length && ftnRefCps.length) {
+      var nFtn = Math.min(ftnParas.length, ftnRefCps.length);
+      ftnTxtCps = [0];
+      for (var fi = 0; fi < nFtn; fi++) {
+        emitSpecial(0x02);                                  // footnote auto-number mark
+        var frns = ftnParas[fi].runs || [];
+        for (var fr = 0; fr < frns.length; fr++) if (!frns[fr].image && frns[fr].ftnRef == null) emitRun(frns[fr]);
+        emitMark(0x0D); endPara(PNORMAL);
+        ftnTxtCps.push(codes.length - ccpText);             // cumulative end of footnote fi
+      }
+      emitMark(0x0D); endPara(PNORMAL);                     // footnote-document end marker
+      ftnTxtCps.push((codes.length - ccpText) + 2);         // trailing phantom CP (observed +2)
+      ftnRefCps = ftnRefCps.slice(0, nFtn);
+    } else { ftnRefCps = []; }
+    var ccpFtn = codes.length - ccpText;
     var ccp = codes.length, textBytes = ccp * 2;
 
     // ---- new WordDocument: skeleton WD + text + CHPX page(s) + PAPX page(s) --
@@ -443,7 +482,8 @@
     var chpx = placePages(chpxRuns.map(function (r) { return { fc0: fcAt(r.s), fc1: fcAt(r.e), blob: r.blob }; }), 1);
     var papx = placePages(papxParas.map(function (p) { return { fc0: fcAt(p.s), fc1: fcAt(p.e), blob: p.blob }; }), 13);
     var newWd = concat(parts, totalLen);
-    u32(newWd, rgLwStart + 3 * 4, ccp);            // ccpText
+    u32(newWd, rgLwStart + 3 * 4, ccpText);        // ccpText (body only)
+    u32(newWd, rgLwStart + 4 * 4, ccpFtn);         // ccpFtn (footnote document)
     u32(newWd, rgLwStart + 0 * 4, newWd.length);   // cbMac
 
     // ---- new 1Table: skeleton table + appended CLX / PlcfBteChpx / PlcfBtePapx
@@ -480,10 +520,24 @@
     var dggOff = dggBytes ? append(dggBytes) : -1;   // drawing-group defaults for the pictures
     var fldBytes = plcfldBytes(fieldMarks);
     var fldOff = fldBytes ? append(fldBytes) : -1;   // PlcfFldMom (hyperlink field positions)
+    // Footnote PLCs: PlcffndRef (#2) = N body ref CPs + doc-end lim + N FRDs (nAuto);
+    // PlcffndTxt (#3) = the footnote-document text boundaries.
+    var ftnRefBytes = null, ftnTxtBytes = null;
+    if (ftnRefCps.length && ftnTxtCps) {
+      var nF = ftnRefCps.length, docEndLim = ccpText + ccpFtn + 1;
+      ftnRefBytes = new Uint8Array((nF + 1) * 4 + nF * 2);
+      for (var rfi = 0; rfi < nF; rfi++) u32(ftnRefBytes, rfi * 4, ftnRefCps[rfi]);
+      u32(ftnRefBytes, nF * 4, docEndLim);
+      for (rfi = 0; rfi < nF; rfi++) u16(ftnRefBytes, (nF + 1) * 4 + rfi * 2, rfi + 1);
+      ftnTxtBytes = new Uint8Array(ftnTxtCps.length * 4);
+      for (var tci = 0; tci < ftnTxtCps.length; tci++) u32(ftnTxtBytes, tci * 4, ftnTxtCps[tci]);
+    }
+    var ftnRefOff = ftnRefBytes ? append(ftnRefBytes) : -1;
+    var ftnTxtOff = ftnTxtBytes ? append(ftnTxtBytes) : -1;
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
-    if (sedLcb >= 8) u32(newTbl, sedFc + ((sedLcb - 4) / 16) * 4, ccp);
+    if (sedLcb >= 8) u32(newTbl, sedFc + ((sedLcb - 4) / 16) * 4, ccpText);
     function setPair(idx, fc, lcb) { u32(newWd, fcLcbStart + idx * 8, fc); u32(newWd, fcLcbStart + idx * 8 + 4, lcb); }
     setPair(33, clxOff, clx.length);     // Clx
     setPair(12, pbteCOff, pbteC.length); // PlcfBteChpx
@@ -491,6 +545,8 @@
     if (ffnOff >= 0) setPair(15, ffnOff, newFfn.length);  // SttbfFfn (grown)
     if (dggOff >= 0) setPair(50, dggOff, dggBytes.length); // fcDggInfo (drawing group)
     if (fldOff >= 0) setPair(16, fldOff, fldBytes.length); // PlcfFldMom (hyperlink fields)
+    if (ftnRefOff >= 0) setPair(2, ftnRefOff, ftnRefBytes.length); // PlcffndRef
+    if (ftnTxtOff >= 0) setPair(3, ftnTxtOff, ftnTxtBytes.length); // PlcffndTxt
 
     var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];
     if (dataLen) streams.push({ name: 'Data', data: concat(dataParts, dataLen) });
