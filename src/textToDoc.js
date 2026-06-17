@@ -293,6 +293,7 @@
     if (r.image && r.image.bytes) return { image: r.image };
     if (r.ftnRef != null) return { ftnRef: r.ftnRef };   // footnote-reference anchor (no text)
     if (r.endRef != null) return { endRef: r.endRef };   // endnote-reference anchor (no text)
+    if (r.comRef != null) return { comRef: r.comRef };   // comment-reference anchor (no text)
     var n = { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
     if (r.url) n.url = String(r.url);
     return n;
@@ -324,6 +325,9 @@
     var ftrParas = storyParas(input, 'footer');       // page footer paragraphs (odd-page)
     var ednParas = storyParas(input, 'endnotes');     // endnote-document paragraphs (one per endnote)
     var ednRefCps = [];                               // body CPs of the endnote-reference chars
+    var comParas = storyParas(input, 'annotations');  // comment (annotation) paragraphs — matches docToText.model().annotations
+    if (!comParas.length) comParas = storyParas(input, 'comments'); // friendly alias
+    var comRefCps = [];                               // body CPs of the comment-reference chars
 
     var wd = cfb.byName['WordDocument'];
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
@@ -384,6 +388,7 @@
     function emitRun(run) {
       if (run.ftnRef != null) return emitFootnoteRef(run);
       if (run.endRef != null) return emitEndnoteRef(run);
+      if (run.comRef != null) return emitCommentRef(run);
       if (!run.text) return;
       if (run.url) return emitHyperlink(run);
       var s0 = codes.length;
@@ -400,6 +405,7 @@
     }
     function emitFootnoteRef() { ftnRefCps.push(codes.length); emitSpecial(0x02); }
     function emitEndnoteRef() { ednRefCps.push(codes.length); emitSpecial(0x02); }
+    function emitCommentRef() { comRefCps.push(codes.length); emitSpecial(0x05); }
     // Hyperlink run -> a HYPERLINK field: begin mark (0x13) + a hidden instruction
     // (HYPERLINK "addr") + separator (0x14) + the visible result text + end (0x15).
     // The begin/sep/end positions are recorded for the field PLC (PlcfFldMom) so
@@ -455,13 +461,13 @@
     // ---- Footnote / endnote documents: one paragraph per note, each
     // [0x02 ref][text][0x0D] then a trailing mark. The txt PLC records boundaries
     // [0, ...ends..., ccp+2]; the ref PLC the body positions + an FRD each.
-    function appendNotes(noteParas, refCps) {
+    function appendNotes(noteParas, refCps, refChar) {
       if (!noteParas.length || !refCps.length) return { txtCps: null, refCps: [] };
       var start = codes.length, n = Math.min(noteParas.length, refCps.length), txtCps = [0];
       for (var i = 0; i < n; i++) {
-        emitSpecial(0x02);                                  // note auto-number mark
+        emitSpecial(refChar || 0x02);                       // note auto-number / annotation mark
         var rs = noteParas[i].runs || [];
-        for (var j = 0; j < rs.length; j++) if (!rs[j].image && rs[j].ftnRef == null && rs[j].endRef == null) emitRun(rs[j]);
+        for (var j = 0; j < rs.length; j++) if (!rs[j].image && rs[j].ftnRef == null && rs[j].endRef == null && rs[j].comRef == null) emitRun(rs[j]);
         emitMark(0x0D); endPara(PNORMAL);
         txtCps.push(codes.length - start);                  // cumulative end of note i
       }
@@ -480,7 +486,7 @@
     var hddStart = codes.length, hddCps = null;
     if (hdrParas.length || ftrParas.length) {
       hddCps = [];
-      function emitStoryParas(ps) { for (var i = 0; i < ps.length; i++) { var rs = ps[i].runs || []; for (var j = 0; j < rs.length; j++) if (!rs[j].image && rs[j].ftnRef == null && rs[j].endRef == null) emitRun(rs[j]); emitMark(0x0D); endPara(PNORMAL); } }
+      function emitStoryParas(ps) { for (var i = 0; i < ps.length; i++) { var rs = ps[i].runs || []; for (var j = 0; j < rs.length; j++) if (!rs[j].image && rs[j].ftnRef == null && rs[j].endRef == null && rs[j].comRef == null) emitRun(rs[j]); emitMark(0x0D); endPara(PNORMAL); } }
       for (var hk = 0; hk < 13; hk++) {
         hddCps.push(codes.length - hddStart);          // start CP of story hk
         if (hk === 7 && hdrParas.length) emitStoryParas(hdrParas);
@@ -491,7 +497,13 @@
     }
     var ccpHdd = codes.length - hddStart;
 
-    // ---- Endnote document: same shape as footnotes, after the header document.
+    // ---- Comment (annotation) document: same shape, ref char 0x05, placed BEFORE
+    // endnotes in CP order. PlcfandRef carries a 30-byte ATRD per comment.
+    var atnStart = codes.length;
+    var atn = appendNotes(comParas, comRefCps, 0x05); comRefCps = atn.refCps; var atnTxtCps = atn.txtCps;
+    var ccpAtn = codes.length - atnStart;
+
+    // ---- Endnote document: same shape as footnotes, after the comment document.
     var ednStart = codes.length;
     var edn = appendNotes(ednParas, ednRefCps); ednRefCps = edn.refCps; var ednTxtCps = edn.txtCps;
     var ccpEdn = codes.length - ednStart;
@@ -516,6 +528,7 @@
     u32(newWd, rgLwStart + 3 * 4, ccpText);        // ccpText (body only)
     u32(newWd, rgLwStart + 4 * 4, ccpFtn);         // ccpFtn (footnote document)
     u32(newWd, rgLwStart + 5 * 4, ccpHdd);         // ccpHdd (header document)
+    u32(newWd, rgLwStart + 7 * 4, ccpAtn);         // ccpAtn (comment document)
     u32(newWd, rgLwStart + 8 * 4, ccpEdn);         // ccpEdn (endnote document)
     u32(newWd, rgLwStart + 0 * 4, newWd.length);   // cbMac
 
@@ -564,14 +577,27 @@
       return b;
     }
     function txtBytesOf(txtCps) { var b = new Uint8Array(txtCps.length * 4); for (var i = 0; i < txtCps.length; i++) u32(b, i * 4, txtCps[i]); return b; }
+    // PlcfandRef (#4) carries a 30-byte ATRD per comment: xstUsrInitials (Xst, cch
+    // + up to 10 UTF-16 chars) + ibst (owner index) + 6 bytes (ak/grfbmc/lTagBkmk).
+    function atrdRefBytes(refCps) {
+      var nF = refCps.length, b = new Uint8Array((nF + 1) * 4 + nF * 30), base = (nF + 1) * 4;
+      for (var i = 0; i < nF; i++) u32(b, i * 4, refCps[i]);
+      u32(b, nF * 4, docEndLim);
+      for (i = 0; i < nF; i++) { var o = base + i * 30; u16(b, o, 1); u16(b, o + 2, 0x43); u32(b, o + 26, 0xFFFFFFFF); } // initials "C", ibst 0, lTagBkmk -1
+      return b;
+    }
     var ftnRefBytes = (ftnRefCps.length && ftnTxtCps) ? refBytesOf(ftnRefCps) : null;
     var ftnTxtBytes = (ftnRefCps.length && ftnTxtCps) ? txtBytesOf(ftnTxtCps) : null;
     var ednRefBytes = (ednRefCps.length && ednTxtCps) ? refBytesOf(ednRefCps) : null;
     var ednTxtBytes = (ednRefCps.length && ednTxtCps) ? txtBytesOf(ednTxtCps) : null;
+    var atnRefBytes = (comRefCps.length && atnTxtCps) ? atrdRefBytes(comRefCps) : null;
+    var atnTxtBytes = (comRefCps.length && atnTxtCps) ? txtBytesOf(atnTxtCps) : null;
     var ftnRefOff = ftnRefBytes ? append(ftnRefBytes) : -1;
     var ftnTxtOff = ftnTxtBytes ? append(ftnTxtBytes) : -1;
     var ednRefOff = ednRefBytes ? append(ednRefBytes) : -1;
     var ednTxtOff = ednTxtBytes ? append(ednTxtBytes) : -1;
+    var atnRefOff = atnRefBytes ? append(atnRefBytes) : -1;
+    var atnTxtOff = atnTxtBytes ? append(atnTxtBytes) : -1;
     // PlcfHdd (#11): the header-document story boundaries (CP array, no data).
     var hddBytes = null;
     if (hddCps) { hddBytes = new Uint8Array(hddCps.length * 4); for (var hi = 0; hi < hddCps.length; hi++) u32(hddBytes, hi * 4, hddCps[hi]); }
@@ -591,6 +617,8 @@
     if (ftnTxtOff >= 0) setPair(3, ftnTxtOff, ftnTxtBytes.length); // PlcffndTxt
     if (ednRefOff >= 0) setPair(46, ednRefOff, ednRefBytes.length); // PlcfendRef
     if (ednTxtOff >= 0) setPair(47, ednTxtOff, ednTxtBytes.length); // PlcfendTxt
+    if (atnRefOff >= 0) setPair(4, atnRefOff, atnRefBytes.length); // PlcfandRef
+    if (atnTxtOff >= 0) setPair(5, atnTxtOff, atnTxtBytes.length); // PlcfandTxt
     if (hddOff >= 0) setPair(11, hddOff, hddBytes.length); // PlcfHdd (headers/footers)
 
     var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];

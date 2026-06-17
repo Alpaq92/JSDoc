@@ -121,20 +121,21 @@ check('header/footer stay out of the body', docToText(hfDoc).indexOf('The Header
 // endnote text round-trip (ccpEdn + PlcfendRef/PlcfendTxt), kept distinct from
 // footnotes, and a single doc carries footnote + endnote + header + footer at once.
 var combo = textToDoc({
-  body: [{ runs: [{ text: 'A' }, { ftnRef: 0 }, { text: ' B' }, { endRef: 0 }, { text: ' C.' }], kind: 'p' }],
+  body: [{ runs: [{ text: 'A' }, { ftnRef: 0 }, { text: ' B' }, { endRef: 0 }, { text: ' C' }, { comRef: 0 }, { text: ' D.' }], kind: 'p' }],
   footnotes: [{ runs: [{ text: ' fn' }], kind: 'p' }],
   endnotes: [{ runs: [{ text: ' en' }], kind: 'p' }],
+  annotations: [{ runs: [{ text: ' cm' }], kind: 'p' }],
   header: [{ runs: [{ text: 'hd' }], kind: 'p' }],
   footer: [{ runs: [{ text: 'ft' }], kind: 'p' }]
 });
 var cm = docToText.model(combo);
 function hasRef(body, key, v) { return body.some(function (p) { return (p.runs || []).some(function (r) { return r[key] === v; }); }); }
-check('endnote anchor round-trips, distinct from footnote', hasRef(cm.body, 'endRef', 0) && hasRef(cm.body, 'ftnRef', 0));
-check('endnote text lands in the endnote story', (docToText.sections(combo).endnotes || '').indexOf('en') !== -1);
-check('footnote + endnote + header + footer coexist, body clean',
-  flatText(cm.footnotes).indexOf('fn') !== -1 && flatText(cm.endnotes).indexOf('en') !== -1 &&
+check('footnote, endnote and comment anchors round-trip distinctly', hasRef(cm.body, 'ftnRef', 0) && hasRef(cm.body, 'endRef', 0) && hasRef(cm.body, 'comRef', 0));
+check('endnote + comment text land in their stories', (docToText.sections(combo).endnotes || '').indexOf('en') !== -1 && (docToText.sections(combo).annotations || '').indexOf('cm') !== -1);
+check('all five stories coexist (footnote/endnote/comment/header/footer), body clean',
+  flatText(cm.footnotes).indexOf('fn') !== -1 && flatText(cm.endnotes).indexOf('en') !== -1 && flatText(cm.annotations).indexOf('cm') !== -1 &&
   flatText(cm.header).indexOf('hd') !== -1 && flatText(cm.footer).indexOf('ft') !== -1 &&
-  docToText(combo).replace(/\s+/g, ' ').indexOf('A B C.') !== -1);
+  docToText(combo).replace(/\s+/g, ' ').indexOf('A B C D.') !== -1);
 
 // 10) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
@@ -155,6 +156,7 @@ check('footnote + endnote + header + footer coexist, body clean',
     return we.extract(Buffer.from(combo));
   }).then(function (d4) {
     check('word-extractor reads the written endnote (getEndnotes)', (d4.getEndnotes() || '').indexOf('en') !== -1);
+    check('word-extractor reads the written comment (getAnnotations)', (d4.getAnnotations() || '').indexOf('cm') !== -1);
     done();
   }).catch(function (e) { check('word-extractor cross-check (' + e.message + ')', false); done(); });
 })();

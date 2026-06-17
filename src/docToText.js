@@ -400,6 +400,7 @@
     var listKind = parseListNfc(tableBytes, fibRgFcLcbStart, dv);
     var footnoteRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 2); // PlcffndRef #2 -> { bodyCp: footnoteIndex }
     var endnoteRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 46); // PlcfendRef #46 -> { bodyCp: endnoteIndex }
+    var commentRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 4, 30); // PlcfandRef #4 (ATRD=30) -> { bodyCp: commentIndex }
     function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
     // Paragraph spacing/indentation (twips): left/right/first-line indent, space
     // before/after, and line spacing (LSPD: line + lineMult flag). Only non-zero
@@ -419,7 +420,7 @@
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null);
     }
     // Split the header document (PlcfHdd) into the real page header & footer for
     // the first section — skipping the footnote/endnote separator stories (0-5)
@@ -756,11 +757,12 @@
   // A reference PLC (PlcffndRef #2 etc.): N+1 CPs — the first N are the CPs of the
   // reference characters (0x02) in the main story, the last is the doc-end lim —
   // plus N 2-byte FRD records. Returns { bodyCp: refIndex } for the N references.
-  function parseRefCps(table, fibStart, fibDv, idx) {
+  function parseRefCps(table, fibStart, fibDv, idx, dataSize) {
     try {
+      var cb = dataSize || 2;   // FRD (footnote/endnote) = 2 bytes; ATRD (comments) = 30
       var fc = fibDv.getUint32(fibStart + idx * 8, true), lcb = fibDv.getUint32(fibStart + idx * 8 + 4, true);
-      if (lcb < 10 || fc < 0 || fc + lcb > table.length) return null;
-      var n = Math.floor((lcb - 4) / 6);
+      if (lcb < 4 + cb || fc < 0 || fc + lcb > table.length) return null;
+      var n = Math.floor((lcb - 4) / (4 + cb));
       if (n < 1) return null;
       var dv = new DataView(table.buffer, table.byteOffset, table.byteLength), map = {};
       for (var i = 0; i < n; i++) map[dv.getUint32(fc + i * 4, true)] = i;
@@ -942,7 +944,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, footnoteRefs, endnoteRefs) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, footnoteRefs, endnoteRefs, commentRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
@@ -967,6 +969,7 @@
       // anchor run so the writer can re-place it and re-link the footnote text.
       if (code === 0x02 && footnoteRefs && footnoteRefs[cp] != null) { flushRun(); runs.push({ ftnRef: footnoteRefs[cp] }); curKey = null; return; }
       if (code === 0x02 && endnoteRefs && endnoteRefs[cp] != null) { flushRun(); runs.push({ endRef: endnoteRefs[cp] }); curKey = null; return; }
+      if (code === 0x05 && commentRefs && commentRefs[cp] != null) { flushRun(); runs.push({ comRef: commentRefs[cp] }); curKey = null; return; }
       // Field marks. For a top-level field we collect the instruction text (so a
       // HYPERLINK URL can be recovered) and tag the result runs with the URL.
       if (code === 0x13) { flushCells(); flushRun(); fieldStack.push(true); if (fieldStack.length === 1) { inInstr = true; instr = ''; curKey = null; } return; }

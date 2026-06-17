@@ -76,6 +76,7 @@
      image is centred via its paragraph's text-align). */
   .docimg { max-width: 100%; max-height: 300px; height: auto; vertical-align: top; }
   .ftnref { color: var(--accent); font-weight: 600; padding: 0 1px; }
+  .comref { color: #d08000; font-weight: 600; padding: 0 1px; cursor: help; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -268,6 +269,8 @@
       } else if (r.endRef != null) {
         var rn = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"][r.endRef] || (r.endRef + 1);
         s += '<sup class="ftnref" title="endnote ' + (r.endRef + 1) + '">' + rn + "</sup>";
+      } else if (r.comRef != null) {
+        s += '<sup class="comref" title="comment ' + (r.comRef + 1) + '">✎</sup>';
       } else if (r.text) {
         var css = runStyle(r);
         var inner = css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
