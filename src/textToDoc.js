@@ -291,7 +291,9 @@
   // model paragraphs, or a docToText.model() story ({ body: [...] }).
   function normRun(r) {
     if (r.image && r.image.bytes) return { image: r.image };
-    return { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
+    var n = { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
+    if (r.url) n.url = String(r.url);
+    return n;
   }
   function toParagraphs(input) {
     if (input && !Array.isArray(input) && Array.isArray(input.body)) input = input.body;
@@ -368,9 +370,35 @@
     var codes = [], chpxRuns = [], papxParas = [], paraStart = 0;
     function emitRun(run) {
       if (!run.text) return;
+      if (run.url) return emitHyperlink(run);
       var s0 = codes.length;
       for (var i = 0; i < run.text.length; i++) codes.push(run.text.charCodeAt(i));
       chpxRuns.push({ s: s0, e: codes.length, blob: chpxBlob(run, ftcFor(run.font)) });
+    }
+    // Hyperlink run -> a HYPERLINK field: begin mark (0x13) + a hidden instruction
+    // (HYPERLINK "addr") + separator (0x14) + the visible result text + end (0x15).
+    // The begin/sep/end positions are recorded for the field PLC (PlcfFldMom) so
+    // real editors treat it as a live, clickable field.
+    var fieldMarks = [];
+    // A field mark (0x13/0x14/0x15) is a "special" character — like the picture
+    // char — so its CHPX must set sprmCFSpec, otherwise editors treat it as a
+    // literal control char and show the raw instruction instead of a live field.
+    function emitFieldMark(code) {
+      fieldMarks.push({ cp: codes.length, kind: code });
+      codes.push(code);
+      var g = []; sprm(g, 0x0855, [1]); // sprmCFSpec
+      var blob = new Uint8Array(g.length + 1); blob[0] = g.length; blob.set(g, 1);
+      chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: blob });
+    }
+    function emitHyperlink(run) {
+      var instr = ' HYPERLINK "' + String(run.url).replace(/["\r\n]/g, '') + '" ';
+      emitFieldMark(0x13);
+      var bs = codes.length;
+      for (var i = 0; i < instr.length; i++) codes.push(instr.charCodeAt(i));
+      chpxRuns.push({ s: bs, e: codes.length, blob: null });
+      emitFieldMark(0x14);
+      emitRun({ text: run.text, b: run.b, i: run.i, u: run.u, strike: run.strike, size: run.size, font: run.font, color: run.color });
+      emitFieldMark(0x15);
     }
     function emitMark(code) { codes.push(code); chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: null }); }
     function endPara(blob) { papxParas.push({ s: paraStart, e: codes.length, blob: blob }); paraStart = codes.length; }
@@ -423,6 +451,19 @@
     var clx = new Uint8Array(21);
     clx[0] = 0x02; u32(clx, 1, 16); u32(clx, 5, 0); u32(clx, 9, ccp); u16(clx, 13, 0); u32(clx, 15, T); u16(clx, 19, 0);
     function plcfBte(p) { var b = new Uint8Array(p.fcs.length * 4 + p.pns.length * 4); for (var i = 0; i < p.fcs.length; i++) u32(b, i * 4, p.fcs[i]); for (i = 0; i < p.pns.length; i++) u32(b, p.fcs.length * 4 + i * 4, p.pns[i]); return b; }
+    // PlcfFldMom: a PLC over the field-mark CPs (begin/sep/end) with a 2-byte Fld
+    // each. Fld byte 1 mirrors a real editor: begin -> flt 0x58 (HYPERLINK),
+    // separator -> 0xFF, end -> 0x84 (fHasSep | fResultDirty). Without this PLC,
+    // editors show the raw "HYPERLINK ..." instruction instead of a live link.
+    function plcfldBytes(marks) {
+      if (!marks.length) return null;
+      var n = marks.length, b = new Uint8Array((n + 1) * 4 + n * 2);
+      for (var i = 0; i < n; i++) u32(b, i * 4, marks[i].cp);
+      u32(b, n * 4, marks[n - 1].cp + 1);
+      var fb = (n + 1) * 4;
+      for (i = 0; i < n; i++) { var k = marks[i].kind; b[fb + i * 2] = k; b[fb + i * 2 + 1] = k === 0x13 ? 0x58 : (k === 0x14 ? 0xFF : 0x84); }
+      return b;
+    }
     var newFfn = null;
     if (ffnInfo && newFfns.length) {
       var head = ffnInfo.bytes.slice(0, ffnInfo.used);
@@ -437,6 +478,8 @@
     var ffnOff = newFfn ? append(newFfn) : -1;
     var dggBytes = dataLen ? picParts().dgg : null;
     var dggOff = dggBytes ? append(dggBytes) : -1;   // drawing-group defaults for the pictures
+    var fldBytes = plcfldBytes(fieldMarks);
+    var fldOff = fldBytes ? append(fldBytes) : -1;   // PlcfFldMom (hyperlink field positions)
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
@@ -447,6 +490,7 @@
     setPair(13, pbtePOff, pbteP.length); // PlcfBtePapx
     if (ffnOff >= 0) setPair(15, ffnOff, newFfn.length);  // SttbfFfn (grown)
     if (dggOff >= 0) setPair(50, dggOff, dggBytes.length); // fcDggInfo (drawing group)
+    if (fldOff >= 0) setPair(16, fldOff, fldBytes.length); // PlcfFldMom (hyperlink fields)
 
     var streams = [{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }];
     if (dataLen) streams.push({ name: 'Data', data: concat(dataParts, dataLen) });

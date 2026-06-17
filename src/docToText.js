@@ -896,6 +896,7 @@
   // color is a COLORREF int (0x00BBGGRR) or null.
   function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
+    var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
     function props(p) {
       var color = null;
@@ -903,14 +904,23 @@
       return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color };
     }
     function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color; }
-    function flushRun() { if (buf) { runs.push({ text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }); buf = ''; } }
+    // A HYPERLINK field instruction is `HYPERLINK "addr" [switches]`; the address
+    // is the first quoted token (or first bare token for an unquoted URL).
+    function parseHyperlink(s) {
+      var m = /HYPERLINK\s+(.*)/i.exec(s); if (!m) return null;
+      var q = /"([^"]+)"/.exec(m[1]); if (q) return q[1];
+      var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
+    }
+    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
     function endPara(kind, fc) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; paras.push(par); runs = []; curKey = null; curProps = null; }
     function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
     function feed(code, fc) {
-      if (code === 0x13) { flushCells(); fieldStack.push(true); return; }
-      if (code === 0x14) { flushCells(); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
-      if (code === 0x15) { flushCells(); if (fieldStack.length) fieldStack.pop(); return; }
-      for (var i = 0; i < fieldStack.length; i++) if (fieldStack[i]) return;
+      // Field marks. For a top-level field we collect the instruction text (so a
+      // HYPERLINK URL can be recovered) and tag the result runs with the URL.
+      if (code === 0x13) { flushCells(); flushRun(); fieldStack.push(true); if (fieldStack.length === 1) { inInstr = true; instr = ''; curKey = null; } return; }
+      if (code === 0x14) { flushCells(); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; if (fieldStack.length === 1) { inInstr = false; curUrl = parseHyperlink(instr); curKey = null; } return; }
+      if (code === 0x15) { flushCells(); flushRun(); if (fieldStack.length) fieldStack.pop(); if (fieldStack.length === 0) { curUrl = null; curKey = null; } return; }
+      for (var i = 0; i < fieldStack.length; i++) if (fieldStack[i]) { if (inInstr) { var ic = mapChar(code); if (ic) instr += ic; } return; }
       if (code === 0x07) { cells++; return; }
       flushCells();
       if (code === 0x0A || code === 0x0B || code === 0x0C || code === 0x0D) { endPara('p', fc); return; }
