@@ -66,14 +66,16 @@ Not handled yet (and where each would slot in):
 
 ## Writing a `.doc`
 
-The reverse direction. **`textToDoc(text)`** ([src/textToDoc.js](src/textToDoc.js)) writes a minimal Word 97–2003 **binary `.doc`** (OLE2 container + FIB + single-piece table) from a string and returns a `Uint8Array` — the inverse of the reader, so `docToText(textToDoc(s)) === s` (plus Word's required trailing paragraph mark). The demo's **Download .doc** button uses it.
+The reverse direction. **`textToDoc(text)`** ([src/textToDoc.js](src/textToDoc.js)) writes a Word 97–2003 **binary `.doc`** from a string and returns a `Uint8Array` — the inverse of the reader, so `docToText(textToDoc(s)) === s` (plus the required trailing paragraph mark). The demo's **Download .doc** button uses it.
 
 ```js
 const textToDoc = require('./src/textToDoc.js');
 fs.writeFileSync('out.doc', Buffer.from(textToDoc('Hello\nWorld')));
 ```
 
-v1 writes **body text + paragraph breaks** (UTF-16); writing the *styling* back (CHPX/PAPX/STSH) is a follow-on. With no Word in CI, the output is validated by reading it back with **two independent parsers** — our `docToText` *and* the unrelated `word-extractor` — both of which parse it correctly ([test/writer.test.js](test/writer.test.js)).
+**How, and why it's not from scratch.** A `.doc` synthesised entirely from spec round-trips through lenient parsers but **real word processors reject it** — they require a valid stylesheet, section table, and character/paragraph property tables, and getting every one right blind is the wall (Apache POI doesn't build a `.doc` from scratch either). So the writer **injects** the text into a tiny **bundled blank-document skeleton** — a genuine app-saved empty `.doc`, stripped to its `WordDocument` + `1Table` streams (FIB, stylesheet, sections, fonts), embedded in the module. It reuses those structures and swaps in the body text, piece table, and freshly built CHPX/PAPX property pages. Pass your own blank `.doc` as a second argument to use a different skeleton: `textToDoc(text, myTemplateBytes)`.
+
+v1 writes **body text + paragraph breaks** (UTF-16) in the Normal style; writing *styling* back is a follow-on. The output is checked three ways: read back by our `docToText` *and* the unrelated `word-extractor` ([test/writer.test.js](test/writer.test.js)), and — since the lenient parsers were exactly the problem — confirmed to **open cleanly in a real word processor** (SoftMaker TextMaker), driven through its COM automation ([scripts/read-with-textmaker.ps1](scripts/read-with-textmaker.ps1)).
 
 ## How it works
 
@@ -100,3 +102,5 @@ npm run test:oracle # compares against word-extractor on real .doc files
 [`0BSD`](LICENSE) — public-domain-equivalent, no attribution required, so it can live anywhere.
 
 `word-extractor` (MIT) is a dev-only test dependency and isn't part of the shipped code. The demo's sample, [`samples/license-comparison.doc`](samples/license-comparison.doc), is a renamed copy of `test03.doc` from word-extractor (MIT, © 2016–2021 Stuart Watt) — permissive, so it doesn't affect the `0BSD` license of the extractor.
+
+The writer's skeleton, [`samples/blank-template.doc`](samples/blank-template.doc) — an empty document saved by SoftMaker FreeOffice, stripped to its `WordDocument` + `1Table` streams and embedded into the writer via [`scripts/embed-template.js`](scripts/embed-template.js) — is a structural empty document with no authored content, so it carries no copyrightable expression.

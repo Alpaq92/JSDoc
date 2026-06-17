@@ -3,3 +3,6 @@ test/fixtures/
 package-lock.json
 .serve*.js
 .claude/
+# Local-only: the raw donated template (its stripped skeleton, blank-template.doc, is committed instead)
+samples/template.doc
+*.bak

@@ -2,14 +2,16 @@
 /*
  * writer.test.js — validate textToDoc() by round-tripping the .doc it writes.
  *
- * There's no Word in this environment, so "is the output a valid .doc?" is
- * answered by reading it back with two independent parsers: our own docToText
- * (must reproduce the input exactly) and the unrelated word-extractor (must
- * parse it and find the text). Both succeeding is strong evidence the binary
- * is well-formed.
+ * This cross-platform test reads the output back with two independent parsers:
+ * our own docToText (must reproduce the input exactly) and the unrelated
+ * word-extractor (must parse it and find the text). Both succeeding is strong
+ * evidence the binary is well-formed. The docToText round-trip is offline and
+ * always runs; the word-extractor check skips if that dev dep isn't installed.
  *
- * The docToText round-trip is offline and always runs; the word-extractor check
- * is best-effort (skips if that dev dependency isn't installed).
+ * Parsers are lenient, though — that's exactly why a from-scratch .doc looked
+ * fine here but failed in a real editor. The decisive check is opening the
+ * output in an actual word processor; see scripts/read-with-textmaker.ps1,
+ * which drives SoftMaker TextMaker via COM (Windows-only, hence not in CI).
  */
 'use strict';
 var textToDoc = require('../src/textToDoc.js');
