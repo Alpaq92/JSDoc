@@ -1,26 +1,28 @@
 // SPDX-License-Identifier: 0BSD
 /*
- * textToDoc(text[, template]) -> Uint8Array : write a Word 97-2003 binary .doc
- * containing `text`. `template` is an optional blank .doc (Uint8Array /
- * ArrayBuffer / Buffer) saved by a real word processor; when omitted, a small
- * bundled skeleton (embedded below) is used.
+ * textToDoc(input[, template]) -> Uint8Array : write a Word 97-2003 binary .doc.
+ * `input` is either a plain string or a styled model — an array of paragraphs
+ * { runs: [{ text, b, i, u, strike, size, font, color }], kind: 'p'|'cell'|'rowEnd' }
+ * as produced by docToText.model(). `template` is an optional blank .doc
+ * (Uint8Array / ArrayBuffer / Buffer) saved by a real word processor; when
+ * omitted, a small bundled skeleton (embedded below) is used.
  *
  * Why a template: a from-scratch .doc round-trips through lenient parsers but
  * real word processors reject it — they need a valid stylesheet, section table
  * and character/paragraph property tables. Rather than synthesise all of those
  * (Apache POI doesn't either), we reuse them from a genuine blank document and
- * only swap in the body text + piece table + property-table FC ranges, building
- * fresh CHPX/PAPX FKP pages. Clean-room from [MS-CFB] (container) + [MS-DOC]
- * (FIB / CLX / FKP).
+ * swap in the body text + piece table + freshly built CHPX/PAPX FKP pages.
+ * Clean-room from [MS-CFB] (container) + [MS-DOC] (FIB / CLX / FKP / sprms).
  *
- * v1 scope: body text + paragraph breaks (UTF-16), Normal-style formatting.
- * No styling write-back yet.
+ * Writes back: paragraphs, character formatting (bold/italic/underline/strike/
+ * size/colour as CHPX sprms) and tables (cell marks + sprmPFInTable / sprmPFTtp
+ * / sprmTDefTable with borders). Not yet: per-run fonts (text uses the Normal
+ * style's font) or embedded images.
  *
- * Verification: round-tripped through docToText AND the independent
- * word-extractor (test/writer.test.js), and confirmed to open cleanly in a real
- * word processor — SoftMaker TextMaker — driven via its COM automation
- * (scripts/read-with-textmaker.ps1), which is what flushed out the structures
- * the lenient parsers didn't require.
+ * Verification: round-tripped through docToText (.model re-reads the table
+ * cells) AND the independent word-extractor (test/styled.test.js / writer.test.js),
+ * and confirmed to open as real bold text + a real table in SoftMaker TextMaker,
+ * driven via its COM automation (scripts/read-with-textmaker.ps1).
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -147,125 +149,171 @@
     return file;
   }
 
-  // ---- FKP page builders ([MS-DOC]) ----------------------------------------
-  // A CHPX FKP page: rgfc[crun+1], rgb[crun] (word offsets to a Chpx), crun@511.
-  // We use one run over the whole text, reusing the template's blank-para Chpx.
-  function chpxFkpPage(fc0, fc1, chpxBytes) {
-    var pg = new Uint8Array(SECTOR), pos = (SECTOR - 1 - chpxBytes.length) & ~1; // even, clear of crun@511
-    pg.set(chpxBytes, pos);            // [cb][grpprl]
-    u32(pg, 0, fc0); u32(pg, 4, fc1);  // rgfc[0..1]
-    pg[8] = pos >> 1;                  // rgb[0] = word offset of the Chpx
-    pg[511] = 1;                       // crun
-    return pg;
+  // ---- character properties -> CHPX grpprl ([MS-DOC] sprms, inverse of the
+  // reader's parseChpGrpprl). ToggleOperands are written as 0x01 (on).
+  function sprm(b, code, operand) { b.push(code & 0xFF, (code >> 8) & 0xFF); for (var i = 0; i < operand.length; i++) b.push(operand[i] & 0xFF); }
+  function chpxGrpprl(r) {
+    var b = [];
+    if (r.b) sprm(b, 0x0835, [1]);            // sprmCFBold
+    if (r.i) sprm(b, 0x0836, [1]);            // sprmCFItalic
+    if (r.strike) sprm(b, 0x0837, [1]);       // sprmCFStrike
+    if (r.u) sprm(b, 0x2A3E, [1]);            // sprmCKul = 1 (single underline)
+    if (r.size) { var hp = Math.round(r.size * 2); sprm(b, 0x4A43, [hp, hp >> 8]); }      // sprmCHps (half-points)
+    if (r.color != null) sprm(b, 0x6870, [r.color, r.color >> 8, r.color >> 16, 0]);     // sprmCCv (COLORREF)
+    return b;
   }
-  // A PAPX FKP page: rgfc[crun+1], rgbx[crun] (BxPap, 13 bytes; first byte =
-  // word offset to a PapxInFkp), crun@511. One run per paragraph, all sharing
-  // the template's blank-para PapxInFkp. Returns null if the runs don't fit.
-  function papxFkpPage(fcs, papxBytes) {
-    var crun = fcs.length - 1;
-    var need = 4 * (crun + 1) + 13 * crun + papxBytes.length + 1;
-    if (need > SECTOR) return null;
-    var pg = new Uint8Array(SECTOR), pos = (SECTOR - 1 - papxBytes.length) & ~1; // even, clear of crun@511
-    pg.set(papxBytes, pos);
-    for (var i = 0; i <= crun; i++) u32(pg, i * 4, fcs[i]);
-    var bx = 4 * (crun + 1);
-    for (i = 0; i < crun; i++) pg[bx + i * 13] = pos >> 1;  // BxPap.bOffset; PHE left 0
-    pg[511] = crun;
-    return pg;
+  // A Chpx in an FKP: [cb][grpprl]. null => use the FKP default (rgb = 0).
+  function chpxBlob(r) { var g = chpxGrpprl(r); if (!g.length) return null; var u = new Uint8Array(g.length + 1); u[0] = g.length; u.set(g, 1); return u; }
+
+  // A PapxInFkp (cb=0 form): [0][cb'][GrpPrlAndIstd], where GrpPrlAndIstd is
+  // istd (2 bytes, 0 = Normal) + grpprl, zero-padded to 2*cb' bytes.
+  function papxInFkp(grpprl) {
+    var body = [0, 0].concat(grpprl), cbq = Math.ceil(body.length / 2);
+    var u = new Uint8Array(2 + cbq * 2); u[1] = cbq;
+    for (var i = 0; i < body.length; i++) u[2 + i] = body[i] & 0xFF;
+    return u;
+  }
+  // sprmTDefTable (0xD608) operand: itcMac, then rgdxaCenter (ncols+1 signed
+  // twips, equal columns across the text width) and rgTc80 (one 20-byte cell
+  // descriptor each — zero-filled = borderless). spra=6 => 2-byte length prefix.
+  function tDefTableSprm(ncols) {
+    var width = 9000, op = [ncols & 0xFF];
+    for (var i = 0; i <= ncols; i++) { var x = Math.round(i * width / ncols) & 0xFFFF; op.push(x & 0xFF, (x >> 8) & 0xFF); }
+    var brc = [6, 1, 0, 0];                 // Brc80: 3/4pt single line, auto colour, on all 4 sides
+    for (i = 0; i < ncols; i++) {
+      op.push(0, 0, 0, 0);                  // TC80: tcgrf=0, wWidth=0 (auto)
+      for (var s = 0; s < 4; s++) op.push(brc[0], brc[1], brc[2], brc[3]); // brcTop/Left/Bottom/Right
+    }
+    return [0x08, 0xD6, op.length & 0xFF, (op.length >> 8) & 0xFF].concat(op);
+  }
+  var SPRM_FINTABLE = [0x16, 0x24, 0x01];  // sprmPFInTable = 1
+  var SPRM_FTTP = [0x17, 0x24, 0x01];      // sprmPFTtp = 1 (table terminator paragraph)
+
+  // Pack runs/paragraphs into 512-byte FKP pages. items: [{fc0, fc1, blob}],
+  // contiguous (item[k].fc1 === item[k+1].fc0). blob is a Chpx ([cb][grpprl],
+  // null => default) or a PapxInFkp. entrySize = bytes per run after rgfc: 1 for
+  // CHPX rgb, 13 for PAPX BxPap (its first byte is the word offset; PHE stays 0).
+  // Returns [{page, fc0, fc1}]; the caller places pages and builds the PlcfBte.
+  function packFkp(items, entrySize) {
+    function evenLen(b) { return b ? (b.length + 1) & ~1 : 0; }   // word-aligned blob span
+    var LIMIT = SECTOR - 2;                                       // reserve byte 510 (gap) + 511 (crun)
+    var pages = [], i = 0;
+    while (i < items.length) {
+      var group = [], blobBytes = 0;
+      while (i < items.length) {
+        var bl = evenLen(items[i].blob);
+        var n = group.length + 1, overhead = 4 * (n + 1) + entrySize * n;
+        if (group.length && overhead + blobBytes + bl > LIMIT) break;
+        group.push(items[i]); blobBytes += bl; i++;
+      }
+      // Place blobs from byte 510 downward at exact even offsets (pos stays even,
+      // so off>>1 is exact and no unaccounted alignment gap can overflow the page).
+      var pg = new Uint8Array(SECTOR), crun = group.length, pos = SECTOR - 2, off = [];
+      for (var j = crun - 1; j >= 0; j--) {
+        var b = group[j].blob;
+        if (b && b.length) { pos -= evenLen(b); pg.set(b, pos); off[j] = pos; } else off[j] = 0;
+      }
+      for (var k = 0; k <= crun; k++) u32(pg, k * 4, k < crun ? group[k].fc0 : group[crun - 1].fc1);
+      var bx = 4 * (crun + 1);
+      for (k = 0; k < crun; k++) pg[bx + k * entrySize] = off[k] >> 1;
+      pg[SECTOR - 1] = crun;
+      pages.push({ page: pg, fc0: group[0].fc0, fc1: group[crun - 1].fc1 });
+    }
+    return pages;
   }
 
-  function normalize(text) {
-    text = String(text == null ? '' : text).replace(/\r\n?|\n/g, '\r');
-    if (!text || text.charCodeAt(text.length - 1) !== 0x0D) text += '\r';
-    return text;
+  // Normalise input to model paragraphs. Accepts a plain string, an array of
+  // model paragraphs, or a docToText.model() story ({ body: [...] }).
+  function normRun(r) {
+    return { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
+  }
+  function toParagraphs(input) {
+    if (input && !Array.isArray(input) && Array.isArray(input.body)) input = input.body;
+    if (Array.isArray(input)) return input.map(function (p) { return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p' }; });
+    var s = String(input == null ? '' : input).replace(/\r\n?|\n/g, '\n');
+    return s.split('\n').map(function (line) { return { runs: line ? [normRun({ text: line })] : [], kind: 'p' }; });
   }
 
-  function textToDoc(text, template) {
+  function textToDoc(input, template) {
     var cfb = readCfb(template || defaultTemplate());
     if (!cfb) throw new Error('template is not a valid .doc (CFB) file');
-    text = normalize(text);
-    var ccp = text.length, textBytes = ccp * 2;
+    var paras = toParagraphs(input);
 
     var wd = cfb.byName['WordDocument'];
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
     var flags = dv.getUint16(10, true), tableName = (flags >> 9) & 1 ? '1Table' : '0Table';
     var tbl = cfb.byName[tableName];
-    // FIB layout
     var csw = dv.getUint16(32, true), rgLwStart = 34 + csw * 2 + 2, cslw = dv.getUint16(rgLwStart - 2, true);
     var fcLcbStart = rgLwStart + cslw * 4 + 2;
     function pairFc(i) { return dv.getUint32(fcLcbStart + i * 8, true); }
     function pairLcb(i) { return dv.getUint32(fcLcbStart + i * 8 + 4, true); }
-    // Clean default formatting, resolved against the template's (reused) stylesheet:
-    // an empty Chpx (inherit Normal's character props) and a Normal-style (istd 0)
-    // PapxInFkp. We deliberately do NOT copy the template's blank-paragraph grpprls,
-    // which can carry stray props (bold/odd font) from whatever app saved it.
-    var chpxBytes = new Uint8Array([0]);            // cb=0 -> no sprms -> default
-    var papxBytes = new Uint8Array([0, 1, 0, 0]);   // cb=0, cb'=1, istd=0 (Normal)
 
-    // ---- new WordDocument: template's WD + text + CHPX page + PAPX page(s) --
-    function pad512(n) { return (n + 511) & ~511; }
-    var T = (wd.length + 1) & ~1;                 // new text offset (even)
-    var parts = [wd];
-    var totalLen = wd.length;
-    function place(arr) { parts.push(arr); var off = totalLen; totalLen += arr.length; return off; }
-    function placeAt(off, arr) { while (totalLen < off) { parts.push(new Uint8Array(off - totalLen)); totalLen = off; } return place(arr); }
-    // text
-    var textBuf = new Uint8Array(textBytes);
-    for (var i = 0; i < ccp; i++) u16(textBuf, i * 2, text.charCodeAt(i));
-    placeAt(T, textBuf);
-    // paragraph boundary FCs (each ends after a 0x0D or final mark)
-    var bounds = [T];
-    for (i = 0; i < ccp; i++) if (text.charCodeAt(i) === 0x0D) bounds.push(T + (i + 1) * 2);
-    if (bounds[bounds.length - 1] !== T + textBytes) bounds.push(T + textBytes);
-    // CHPX page (one run over all text)
-    var chpxPn = pad512(totalLen) / 512;
-    placeAt(chpxPn * 512, chpxFkpPage(T, T + textBytes, chpxBytes));
-    // PAPX pages (split paragraphs across pages as needed)
-    var papxPages = [], perPage = Math.max(1, Math.floor((SECTOR - papxBytes.length - 1 - 4) / 17));
-    var papxPnList = [], papxFcs = [];
-    for (var start = 0; start < bounds.length - 1; start += perPage) {
-      var slice = bounds.slice(start, Math.min(start + perPage + 1, bounds.length));
-      var page = papxFkpPage(slice, papxBytes);
-      var ppn = pad512(totalLen) / 512;
-      placeAt(ppn * 512, page);
-      papxPnList.push(ppn); papxFcs.push(slice[0]);
+    var T = (wd.length + 1) & ~1;                  // text offset in WordDocument (even)
+    function fcAt(charIdx) { return T + charIdx * 2; }
+    // PapxInFkp blobs: Normal paragraph, in-table cell, and (per row) the table
+    // terminator paragraph carrying the column definition.
+    var PNORMAL = papxInFkp([]);
+    var PCELL = papxInFkp(SPRM_FINTABLE);
+    function papxTtp(ncols) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols))); }
+    // Build the character stream with per-run CHPX and per-paragraph PAPX. Table
+    // cells end in a cell mark (0x07) and each row ends with an empty terminator
+    // paragraph; every cell/terminator paragraph is flagged in-table.
+    var codes = [], chpxRuns = [], papxParas = [], paraStart = 0;
+    function emitRun(run) {
+      if (!run.text) return;
+      var s0 = codes.length;
+      for (var i = 0; i < run.text.length; i++) codes.push(run.text.charCodeAt(i));
+      chpxRuns.push({ s: s0, e: codes.length, blob: chpxBlob(run) });
     }
-    papxFcs.push(T + textBytes);
-    var newWd = concat(parts, totalLen);
-    // patch FIB: ccpText, cbMac
-    var ndv = new DataView(newWd.buffer, newWd.byteOffset, newWd.byteLength);
-    u32(newWd, rgLwStart + 3 * 4, ccp);           // ccpText
-    u32(newWd, rgLwStart + 0 * 4, newWd.length);  // cbMac
+    function emitMark(code) { codes.push(code); chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: null }); }
+    function endPara(blob) { papxParas.push({ s: paraStart, e: codes.length, blob: blob }); paraStart = codes.length; }
+    var cellsInRow = 0;
+    for (var pi = 0; pi < paras.length; pi++) {
+      var par = paras[pi];
+      for (var ri = 0; ri < par.runs.length; ri++) emitRun(par.runs[ri]);
+      if (par.kind === 'cell') { emitMark(0x07); endPara(PCELL); cellsInRow++; }
+      else if (par.kind === 'rowEnd') {
+        emitMark(0x07); endPara(PCELL); cellsInRow++;       // final cell of the row
+        emitMark(0x07); endPara(papxTtp(cellsInRow));       // empty row-terminator paragraph
+        cellsInRow = 0;
+      } else { emitMark(0x0D); endPara(PNORMAL); cellsInRow = 0; }  // normal paragraph
+    }
+    if (!codes.length || codes[codes.length - 1] !== 0x0D) { emitMark(0x0D); endPara(PNORMAL); }
+    var ccp = codes.length, textBytes = ccp * 2;
 
-    // ---- new 1Table: template's table + appended CLX + PlcfBteChpx/Papx -----
-    var add = [];
-    // CLX: Pcdt with one piece
+    // ---- new WordDocument: skeleton WD + text + CHPX page(s) + PAPX page(s) --
+    function pad512(n) { return (n + 511) & ~511; }
+    var parts = [wd], totalLen = wd.length;
+    function placeAt(off, arr) { while (totalLen < off) { parts.push(new Uint8Array(off - totalLen)); totalLen = off; } parts.push(arr); totalLen += arr.length; return off; }
+    var textBuf = new Uint8Array(textBytes);
+    for (var c = 0; c < ccp; c++) u16(textBuf, c * 2, codes[c]);
+    placeAt(T, textBuf);
+    function placePages(items, entrySize) {
+      var pages = packFkp(items, entrySize), pns = [], fcs = [];
+      pages.forEach(function (pg) { var pn = pad512(totalLen) / 512; placeAt(pn * 512, pg.page); pns.push(pn); fcs.push(pg.fc0); });
+      fcs.push(pages[pages.length - 1].fc1);
+      return { pns: pns, fcs: fcs };
+    }
+    var chpx = placePages(chpxRuns.map(function (r) { return { fc0: fcAt(r.s), fc1: fcAt(r.e), blob: r.blob }; }), 1);
+    var papx = placePages(papxParas.map(function (p) { return { fc0: fcAt(p.s), fc1: fcAt(p.e), blob: p.blob }; }), 13);
+    var newWd = concat(parts, totalLen);
+    u32(newWd, rgLwStart + 3 * 4, ccp);            // ccpText
+    u32(newWd, rgLwStart + 0 * 4, newWd.length);   // cbMac
+
+    // ---- new 1Table: skeleton table + CLX + PlcfBteChpx + PlcfBtePapx -------
     var clx = new Uint8Array(21);
-    clx[0] = 0x02; u32(clx, 1, 16); u32(clx, 5, 0); u32(clx, 9, ccp);
-    u16(clx, 13, 0); u32(clx, 15, T); u16(clx, 19, 0);
-    var clxOff = tbl.length;
-    add.push(clx);
-    // PlcfBteChpx: 2 FCs + 1 pn
-    var pbteC = new Uint8Array(12);
-    u32(pbteC, 0, T); u32(pbteC, 4, T + textBytes); u32(pbteC, 8, chpxPn);
-    var pbteCOff = clxOff + clx.length;
-    add.push(pbteC);
-    // PlcfBtePapx: (k+1) FCs + k pns
-    var k = papxPnList.length, pbteP = new Uint8Array((k + 1) * 4 + k * 4);
-    for (i = 0; i <= k; i++) u32(pbteP, i * 4, papxFcs[i]);
-    for (i = 0; i < k; i++) u32(pbteP, (k + 1) * 4 + i * 4, papxPnList[i]);
-    var pbtePOff = pbteCOff + pbteC.length;
-    add.push(pbteP);
-    var newTbl = concat([tbl].concat(add), tbl.length + clx.length + pbteC.length + pbteP.length);
-    // extend the section table's last CP to cover the whole text (else Word
-    // treats only the first paragraph as in-section).
+    clx[0] = 0x02; u32(clx, 1, 16); u32(clx, 5, 0); u32(clx, 9, ccp); u16(clx, 13, 0); u32(clx, 15, T); u16(clx, 19, 0);
+    function plcfBte(p) { var b = new Uint8Array(p.fcs.length * 4 + p.pns.length * 4); for (var i = 0; i < p.fcs.length; i++) u32(b, i * 4, p.fcs[i]); for (i = 0; i < p.pns.length; i++) u32(b, p.fcs.length * 4 + i * 4, p.pns[i]); return b; }
+    var pbteC = plcfBte(chpx), pbteP = plcfBte(papx);
+    var clxOff = tbl.length, pbteCOff = clxOff + clx.length, pbtePOff = pbteCOff + pbteC.length;
+    var newTbl = concat([tbl, clx, pbteC, pbteP], tbl.length + clx.length + pbteC.length + pbteP.length);
+    // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
     if (sedLcb >= 8) u32(newTbl, sedFc + ((sedLcb - 4) / 16) * 4, ccp);
-    // repoint FIB fc/lcb pairs to the appended structures
     function setPair(idx, fc, lcb) { u32(newWd, fcLcbStart + idx * 8, fc); u32(newWd, fcLcbStart + idx * 8 + 4, lcb); }
-    setPair(33, clxOff, clx.length);               // Clx
-    setPair(12, pbteCOff, pbteC.length);           // PlcfBteChpx
-    setPair(13, pbtePOff, pbteP.length);           // PlcfBtePapx
+    setPair(33, clxOff, clx.length);     // Clx
+    setPair(12, pbteCOff, pbteC.length); // PlcfBteChpx
+    setPair(13, pbtePOff, pbteP.length); // PlcfBtePapx
 
     return buildCfb([{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }]);
   }

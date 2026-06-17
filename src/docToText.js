@@ -92,6 +92,7 @@
   // formatting (bold/italic/underline/strike/size/color/font), with \t between
   // table cells and \n at row/paragraph breaks. Or null on failure.
   docToText.html = function (input) { var doc = parse(input); return doc ? doc.html : null; };
+  docToText.model = function (input) { var doc = parse(input); return doc ? doc.model : null; };
 
   // docToText.images(input) -> [{ mime, bytes }] for embedded raster images
   // (PNG/JPEG), best effort. Word stores pictures/OLE images as raw image bytes
@@ -388,11 +389,12 @@
     add('footnotes', ccpFtn); add('headers', ccpHdd); add('annotations', ccpAtn);
     add('endnotes', ccpEdn); add('textboxes', ccpTxbx); add('headerTextboxes', ccpHdrTxbx);
 
-    var doc = { html: {} };
+    var doc = { html: {}, model: {} };
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve);
     }
     return doc;
   }
@@ -814,6 +816,66 @@
     }
     flushCells(); flushRun();
     return out.join('');
+  }
+
+  // Structured model for the writer (textToDoc): the same styled runs the HTML
+  // output is built from, but preserving the table cell/row marks the text and
+  // HTML flatten. Returns an array of paragraphs:
+  //   { runs: [{ text, b, i, u, strike, size, font, color }], kind }
+  // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
+  // in the row) or 'rowEnd' (last cell of a table row). size is in points;
+  // color is a COLORREF int (0x00BBGGRR) or null.
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve) {
+    var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
+    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
+    function props(p) {
+      var color = null;
+      if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) color = p.cv & 0xFFFFFF; // already 0x00BBGGRR
+      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color };
+    }
+    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color; }
+    function flushRun() { if (buf) { runs.push({ text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }); buf = ''; } }
+    function endPara(kind) { flushRun(); paras.push({ runs: runs, kind: kind }); runs = []; curKey = null; curProps = null; }
+    function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
+    function feed(code, fc) {
+      if (code === 0x13) { flushCells(); fieldStack.push(true); return; }
+      if (code === 0x14) { flushCells(); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
+      if (code === 0x15) { flushCells(); if (fieldStack.length) fieldStack.pop(); return; }
+      for (var i = 0; i < fieldStack.length; i++) if (fieldStack[i]) return;
+      if (code === 0x07) { cells++; return; }
+      flushCells();
+      if (code === 0x0A || code === 0x0B || code === 0x0C || code === 0x0D) { endPara('p'); return; }
+      var ch = mapChar(code);
+      if (ch === '') return;
+      var pp = resolve ? props(resolve(fc)) : EMPTY;
+      var kk = key(pp);
+      if (kk !== curKey) { flushRun(); curKey = kk; curProps = pp; }
+      buf += ch;
+    }
+    for (var i = 0; i < pieces.length; i++) {
+      var pc = pieces[i];
+      var a = lo > pc.cpStart ? lo : pc.cpStart, b = hi < pc.cpEnd ? hi : pc.cpEnd;
+      if (a >= b) continue;
+      var start = a - pc.cpStart, count = b - a;
+      if (pc.compressed) {
+        var base = pc.offset + start;
+        for (var k = 0; k < count; k++) {
+          var fc = base + k; if (isDeleted && isDeleted(fc)) continue;
+          var byte = wd[fc]; if (byte === undefined) break;
+          feed(byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte), fc);
+        }
+      } else {
+        var u = pc.offset + start * 2;
+        for (var m = 0; m < count; m++) {
+          var fc2 = u + m * 2; if (isDeleted && isDeleted(fc2)) continue;
+          var loB = wd[fc2]; if (loB === undefined) break;
+          feed(loB | ((wd[fc2 + 1] || 0) << 8), fc2);
+        }
+      }
+    }
+    flushCells();
+    if (buf || runs.length) endPara('p');
+    return paras;
   }
 
   // Field markers ([MS-DOC] "Special Characters"): 0x13 begin, 0x14 separator,
