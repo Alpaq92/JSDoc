@@ -451,8 +451,12 @@
       if (fK >= 0) doc.model.footer = grab(fK);
     }
     // Page setup: the first section's properties (margins, page size, orientation).
-    var page = parseSection(tableBytes, fibRgFcLcbStart, dv, wd);
-    if (page) doc.model.page = page;
+    var sections = parseSections(tableBytes, fibRgFcLcbStart, dv, wd);
+    if (sections) {
+      var sx = sections.filter(function (s) { return s; });
+      if (sx.length) doc.model.sections = sx;   // every section's setup
+      if (sections[0]) doc.model.page = sections[0];   // first section (back-compat)
+    }
     // Document properties (title/author/...) from the \x05SummaryInformation stream.
     var props = parseSummaryInfo(cfb);
     if (props) doc.model.props = props;
@@ -864,35 +868,41 @@
     } catch (e) { return null; }
   }
 
-  // First section's page setup from its SEPX (a grpprl of section sprms): margins
+  // A section's page setup from its SEPX (a grpprl of section sprms): margins
   // (sprmSDyaTop 0x9023 / sprmSDyaBottom 0x9024 signed; sprmSDxaLeft 0xB021 /
   // sprmSDxaRight 0xB022), page size (sprmSXaPage 0xB01F / sprmSYaPage 0xB020),
-  // orientation (sprmSBOrientation 0x301D). Twips. Only set fields appear.
-  function parseSection(table, fibStart, fibDv, wd) {
+  // orientation (sprmSBOrientation 0x301D), columns (sprmSCcolumns 0x500B). Twips.
+  function sepxProps(wdv, wd, fcSepx) {
+    if (fcSepx === 0xFFFFFFFF || fcSepx + 2 > wd.length) return null;
+    var cb = wdv.getUint16(fcSepx, true), g = fcSepx + 2, end = fcSepx + 2 + cb, p = {};
+    while (g + 2 <= end && g + 4 <= wd.length) {
+      var sprm = wdv.getUint16(g, true), spra = (sprm >> 13) & 7;
+      var opLen = spra <= 1 ? 1 : (spra === 2 || spra === 4 || spra === 5) ? 2 : spra === 3 ? 4 : spra === 7 ? 3 : (1 + (wd[g + 2] || 0));
+      if (sprm === 0x9023) p.top = wdv.getInt16(g + 2, true);
+      else if (sprm === 0x9024) p.bottom = wdv.getInt16(g + 2, true);
+      else if (sprm === 0xB021) p.left = wdv.getUint16(g + 2, true);
+      else if (sprm === 0xB022) p.right = wdv.getUint16(g + 2, true);
+      else if (sprm === 0xB01F) p.width = wdv.getUint16(g + 2, true);
+      else if (sprm === 0xB020) p.height = wdv.getUint16(g + 2, true);
+      else if (sprm === 0x301D) p.landscape = wd[g + 2] === 2;
+      else if (sprm === 0x500B) p.cols = wdv.getUint16(g + 2, true) + 1;  // sprmSCcolumns (ccolM1)
+      g += 2 + opLen; if (opLen <= 0) break;
+    }
+    return Object.keys(p).length ? p : null;
+  }
+  // Every section's page setup (PlcfSed #6: (n+1) CPs then n 12-byte SEDs, each
+  // SED.fcSepx -> a SEPX in the WordDocument). One entry per section (null for an
+  // unreadable one); a single-section document gives a 1-element array.
+  function parseSections(table, fibStart, fibDv, wd) {
     try {
       var sedFc = fibDv.getUint32(fibStart + 6 * 8, true), sedLcb = fibDv.getUint32(fibStart + 6 * 8 + 4, true);
       if (sedLcb < 16) return null;
       var n = Math.floor((sedLcb - 4) / 16);
       if (n < 1) return null;
       var tdv = new DataView(table.buffer, table.byteOffset, table.byteLength);
-      var fcSepx = tdv.getUint32(sedFc + (n + 1) * 4 + 2, true);   // first SED.fcSepx (offset 2 in the 12-byte SED)
-      if (fcSepx === 0xFFFFFFFF || fcSepx + 2 > wd.length) return null;
-      var wdv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
-      var cb = wdv.getUint16(fcSepx, true), g = fcSepx + 2, end = fcSepx + 2 + cb, p = {};
-      while (g + 2 <= end && g + 4 <= wd.length) {
-        var sprm = wdv.getUint16(g, true), spra = (sprm >> 13) & 7;
-        var opLen = spra <= 1 ? 1 : (spra === 2 || spra === 4 || spra === 5) ? 2 : spra === 3 ? 4 : spra === 7 ? 3 : (1 + (wd[g + 2] || 0));
-        if (sprm === 0x9023) p.top = wdv.getInt16(g + 2, true);
-        else if (sprm === 0x9024) p.bottom = wdv.getInt16(g + 2, true);
-        else if (sprm === 0xB021) p.left = wdv.getUint16(g + 2, true);
-        else if (sprm === 0xB022) p.right = wdv.getUint16(g + 2, true);
-        else if (sprm === 0xB01F) p.width = wdv.getUint16(g + 2, true);
-        else if (sprm === 0xB020) p.height = wdv.getUint16(g + 2, true);
-        else if (sprm === 0x301D) p.landscape = wd[g + 2] === 2;
-        else if (sprm === 0x500B) p.cols = wdv.getUint16(g + 2, true) + 1;  // sprmSCcolumns (ccolM1)
-        g += 2 + opLen; if (opLen <= 0) break;
-      }
-      return Object.keys(p).length ? p : null;
+      var wdv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength), base = sedFc + (n + 1) * 4, out = [];
+      for (var si = 0; si < n; si++) out.push(sepxProps(wdv, wd, tdv.getUint32(base + si * 12 + 2, true)));
+      return out;
     } catch (e) { return null; }
   }
 

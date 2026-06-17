@@ -163,6 +163,9 @@ var lsm = docToText.model(textToDoc({ body: [{ runs: [{ text: 'L' }], kind: 'p' 
 check('orientation (landscape) round-trips (sprmSBOrientation)', !!lsm && lsm.landscape === true && lsm.width === 15840 && lsm.height === 12240);
 check('column count round-trips (sprmSCcolumns)', !!lsm && lsm.cols === 2);
 check('plain portrait page carries no orientation/column flags', !pgm.landscape && pgm.cols == null);
+// The reader exposes every section's setup as model.sections; a single-section
+// document gives a one-element array equal to model.page.
+check('reader exposes model.sections (single section -> one entry === page)', (function () { var ss = docToText.model(pgDoc).sections; return Array.isArray(ss) && ss.length === 1 && JSON.stringify(ss[0]) === JSON.stringify(pgm); })());
 
 // 13) Table column widths: a row's rgdxaCenter (sprmTDefTable) round-trips, so
 // unequal columns aren't flattened to equal widths.
