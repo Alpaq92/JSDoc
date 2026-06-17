@@ -390,11 +390,18 @@
     add('endnotes', ccpEdn); add('textboxes', ccpTxbx); add('headerTextboxes', ccpHdrTxbx);
 
     var doc = { html: {}, model: {} };
+    // Carved images, paired in document order with the body's picture chars so
+    // the model (and thus the writer) can round-trip them.
+    var modelImages = []; try { modelImages = carveImages(cfb) || []; } catch (e) { }
+    var imgCtr = { n: 0 };
+    var dataEntry = cfb.byName['Data'], dataStream = null;
+    try { dataStream = dataEntry ? cfb.getStream(dataEntry) : null; } catch (e) { }
+    function paraAlign(fc) { var r = papx ? runAt(papx, fc) : null; return r ? (r.jc || 0) : 0; }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null);
     }
     return doc;
   }
@@ -521,6 +528,8 @@
         case 0x6870: p.cv = (wd[q] | (wd[q + 1] << 8) | (wd[q + 2] << 16)) >>> 0; break; // 24-bit RGB
         case 0x4A4F: p.ftc = wd[q] | (wd[q + 1] << 8); break;  // font index (ftc0) -> SttbfFfn
         case 0x4A30: p.istd = wd[q] | (wd[q + 1] << 8); break; // character style index
+        case 0x6A03: p.picLoc = (wd[q] | (wd[q + 1] << 8) | (wd[q + 2] << 16) | (wd[q + 3] << 24)) >>> 0; break; // sprmCPicLocation (Data offset)
+        case 0x0855: p.fSpec = wd[q] & 1; break;               // sprmCFSpec (special char, e.g. picture)
       }
       q += sprmOperandLen(sprm, wd, q);
     }
@@ -675,16 +684,24 @@
       var a = dv.getUint32(pageOff + i * 4, true);
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
-      var bOff = wd[bxBase + i * 13], istd = 0;          // BxPap.bOffset
+      var bOff = wd[bxBase + i * 13], istd = 0, jc = 0;  // BxPap.bOffset; jc = alignment
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
           var cb = wd[papx];                             // GrpPrlAndIstd starts at:
           var g = cb !== 0 ? papx + 1 : papx + 2;        // cb!=0 -> +1, else +2
           if (g + 2 <= pageOff + 512) istd = wd[g] | (wd[g + 1] << 8);
+          // walk the grpprl (after the istd) for sprmPJc (paragraph alignment)
+          var grpEnd = cb !== 0 ? papx + 2 * cb : papx + 2 + 2 * (wd[papx + 1] || 0);
+          if (grpEnd > pageOff + 512) grpEnd = pageOff + 512;
+          for (var gp = g + 2; gp + 2 <= grpEnd;) {
+            var sc = wd[gp] | (wd[gp + 1] << 8), ol = sprmOperandLen(sc, wd, gp + 2);
+            if ((sc === 0x2403 || sc === 0x2461) && gp + 2 < grpEnd) jc = wd[gp + 2]; // sprmPJc80 / sprmPJc
+            gp += 2 + ol; if (ol <= 0) break;
+          }
         }
       }
-      runs.push({ a: a, b: b, istd: istd });
+      runs.push({ a: a, b: b, istd: istd, jc: jc });
     }
   }
 
@@ -825,7 +842,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
     function props(p) {
@@ -835,7 +852,7 @@
     }
     function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color; }
     function flushRun() { if (buf) { runs.push({ text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }); buf = ''; } }
-    function endPara(kind) { flushRun(); paras.push({ runs: runs, kind: kind }); runs = []; curKey = null; curProps = null; }
+    function endPara(kind, fc) { flushRun(); paras.push({ runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0 }); runs = []; curKey = null; curProps = null; }
     function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
     function feed(code, fc) {
       if (code === 0x13) { flushCells(); fieldStack.push(true); return; }
@@ -844,7 +861,17 @@
       for (var i = 0; i < fieldStack.length; i++) if (fieldStack[i]) return;
       if (code === 0x07) { cells++; return; }
       flushCells();
-      if (code === 0x0A || code === 0x0B || code === 0x0C || code === 0x0D) { endPara('p'); return; }
+      if (code === 0x0A || code === 0x0B || code === 0x0C || code === 0x0D) { endPara('p', fc); return; }
+      // picture placeholder (0x01): emit an image run, paired in order with the
+      // carved images, plus the picture's display size from its PICF (dxaGoal/
+      // dyaGoal, via sprmCPicLocation) so the writer can re-embed at that size.
+      if (code === 0x01 && images && imgCtr && imgCtr.n < images.length) {
+        flushRun();
+        var img = images[imgCtr.n++], pl = resolve ? resolve(fc).picLoc : null;
+        if (data && pl != null && pl + 32 <= data.length) { var pv = new DataView(data.buffer, data.byteOffset, data.byteLength); img.dxa = pv.getInt16(pl + 0x1C, true); img.dya = pv.getInt16(pl + 0x1E, true); }
+        runs.push({ image: img });
+        return;
+      }
       var ch = mapChar(code);
       if (ch === '') return;
       var pp = resolve ? props(resolve(fc)) : EMPTY;

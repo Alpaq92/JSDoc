@@ -3,6 +3,9 @@ test/fixtures/
 package-lock.json
 .serve*.js
 .claude/
-# Local-only: the raw donated template (its stripped skeleton, blank-template.doc, is committed instead)
+# Local-only reference docs (the picture machinery they taught is embedded in src/textToDoc.js)
 samples/template.doc
+samples/filled-template.doc
+samples/lorem-ipsum.doc
+samples/_*.doc
 *.bak

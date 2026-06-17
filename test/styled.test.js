@@ -45,7 +45,18 @@ var re = docToText.model(doc2).body, kinds = {};
 re.forEach(function (p) { kinds[p.kind] = (kinds[p.kind] || 0) + 1; });
 check('license: table cells round-trip (real 0x07 cells, not tabs)', kinds.cell > 0 && kinds.rowEnd > 0);
 
-// 3) Independent oracle: word-extractor must still parse the styled .doc.
+// 3) Inline image + paragraph alignment round-trip. A 1x1 PNG in a centred
+// paragraph: the image must embed (and read back) and the alignment survive.
+var PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64');
+var imgDoc = textToDoc([
+  { runs: [{ text: 'Above the image.' }], kind: 'p' },
+  { runs: [{ image: { mime: 'image/png', bytes: new Uint8Array(PNG) } }], kind: 'p', align: 1 }
+]);
+var imgData = textToDoc.readCfb(imgDoc).byName['Data'];
+check('image embeds into a Data stream (exact bytes)', !!imgData && Buffer.from(imgData).indexOf(PNG) !== -1);
+check('centred paragraph round-trips (sprmPJc)', docToText.model(imgDoc).body.some(function (p) { return p.align === 1; }));
+
+// 4) Independent oracle: word-extractor must still parse the styled .doc.
 (function () {
   var WordExtractor;
   try { WordExtractor = require('word-extractor'); }
