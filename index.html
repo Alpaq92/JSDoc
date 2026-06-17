@@ -86,6 +86,9 @@
   }
   table.doc-table th { background: var(--accent-soft); color: var(--ink); font-weight: 700; }
   table.doc-table tr:nth-child(even) td { background: rgba(127, 127, 127, .045); }
+  /* Honour the source column widths (rgdxaCenter) when we have them. */
+  table.doc-table.sized { table-layout: fixed; }
+  table.doc-table.sized td { overflow-wrap: break-word; }
   pre#out {
     margin: 0; max-height: 460px; overflow: auto; white-space: pre-wrap;
     word-break: break-word; font-family: var(--mono); font-size: 13px;
@@ -295,7 +298,17 @@
       var p = paras[i];
       if (p.kind === "cell" || p.kind === "rowEnd") {
         closeList();
-        html += '<table class="doc-table"><tbody><tr>';
+        // Proportional column widths from the first row's rgdxaCenter (rowEnd.tblw).
+        var cg = "";
+        for (var ti = i; ti < paras.length && (paras[ti].kind === "cell" || paras[ti].kind === "rowEnd"); ti++) {
+          var bnd = paras[ti].tblw;
+          if (paras[ti].kind === "rowEnd" && bnd && bnd.length > 1) {
+            var span = bnd[bnd.length - 1] - bnd[0];
+            if (span > 0) { cg = "<colgroup>"; for (var ci = 0; ci < bnd.length - 1; ci++) cg += '<col style="width:' + ((bnd[ci + 1] - bnd[ci]) / span * 100).toFixed(2) + '%">'; cg += "</colgroup>"; }
+            break;
+          }
+        }
+        html += '<table class="doc-table' + (cg ? " sized" : "") + '">' + cg + '<tbody><tr>';
         while (i < paras.length && (paras[i].kind === "cell" || paras[i].kind === "rowEnd")) {
           html += "<td>" + runsHtml(paras[i].runs) + "</td>";
           var end = paras[i].kind === "rowEnd"; i++;
