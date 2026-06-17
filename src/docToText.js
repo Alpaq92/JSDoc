@@ -889,6 +889,7 @@
         else if (sprm === 0xB01F) p.width = wdv.getUint16(g + 2, true);
         else if (sprm === 0xB020) p.height = wdv.getUint16(g + 2, true);
         else if (sprm === 0x301D) p.landscape = wd[g + 2] === 2;
+        else if (sprm === 0x500B) p.cols = wdv.getUint16(g + 2, true) + 1;  // sprmSCcolumns (ccolM1)
         g += 2 + opLen; if (opLen <= 0) break;
       }
       return Object.keys(p).length ? p : null;

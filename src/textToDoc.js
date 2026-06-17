@@ -721,22 +721,37 @@
     if (atnTxtOff >= 0) setPair(5, atnTxtOff, atnTxtBytes.length); // PlcfandTxt
     if (hddOff >= 0) setPair(11, hddOff, hddBytes.length); // PlcfHdd (headers/footers)
 
-    // Page setup: patch the first section's SEPX (in the WordDocument) in place
-    // from input.page — margins (sprmSDyaTop 0x9023 / Bottom 0x9024 / sprmSDxaLeft
-    // 0xB021 / Right 0xB022) and page size (sprmSXaPage 0xB01F / sprmSYaPage 0xB020),
-    // all twips. Patching values keeps the skeleton's other section sprms intact.
+    // Page setup: rebuild the first section's SEPX from input.page. Margins
+    // (sprmSDyaTop 0x9023 / Bottom 0x9024 / sprmSDxaLeft 0xB021 / Right 0xB022) and
+    // page size (sprmSXaPage 0xB01F / sprmSYaPage 0xB020) are patched in the
+    // skeleton's grpprl; orientation (sprmSBOrientation 0x301D) and column count
+    // (sprmSCcolumns 0x500B) are appended since the skeleton lacks them. The grown
+    // SEPX no longer fits in place, so it's relocated to the end of the WordDocument
+    // and the SED.fcSepx repointed. All twips.
     if (input && input.page && pairLcb(6) >= 16) {
       var pg = input.page, sTdv = new DataView(newTbl.buffer, newTbl.byteOffset, newTbl.byteLength);
-      var sN = (pairLcb(6) - 4) / 16, sepx = sTdv.getUint32(pairFc(6) + (sN + 1) * 4 + 2, true);
+      var sN = (pairLcb(6) - 4) / 16, fcSepxPos = pairFc(6) + (sN + 1) * 4 + 2, sepx = sTdv.getUint32(fcSepxPos, true);
       if (sepx > 0 && sepx + 2 < newWd.length) {
+        var ocb = newWd[sepx] | (newWd[sepx + 1] << 8), grp = [];
+        for (var gi = 0; gi < ocb && sepx + 2 + gi < newWd.length; gi++) grp.push(newWd[sepx + 2 + gi]);
         var pmap = { 0x9023: pg.top, 0x9024: pg.bottom, 0xB021: pg.left, 0xB022: pg.right, 0xB01F: pg.width, 0xB020: pg.height };
-        var scb = newWd[sepx] | (newWd[sepx + 1] << 8), sg = sepx + 2, send = sepx + 2 + scb;
-        while (sg + 2 <= send && sg + 2 <= newWd.length) {
-          var ss = newWd[sg] | (newWd[sg + 1] << 8), ssa = (ss >> 13) & 7;
-          var sol = ssa <= 1 ? 1 : (ssa === 2 || ssa === 4 || ssa === 5) ? 2 : ssa === 3 ? 4 : ssa === 7 ? 3 : (1 + (newWd[sg + 2] || 0));
-          if (pmap[ss] != null) u16(newWd, sg + 2, pmap[ss] & 0xFFFF);
+        var sg = 0, present = {};
+        while (sg + 2 <= grp.length) {
+          var ss = grp[sg] | (grp[sg + 1] << 8), ssa = (ss >> 13) & 7;
+          var sol = ssa <= 1 ? 1 : (ssa === 2 || ssa === 4 || ssa === 5) ? 2 : ssa === 3 ? 4 : ssa === 7 ? 3 : (1 + (grp[sg + 2] || 0));
+          present[ss] = true;
+          if (pmap[ss] != null) { var pv = pmap[ss] & 0xFFFF; grp[sg + 2] = pv & 0xFF; grp[sg + 3] = (pv >> 8) & 0xFF; }
           sg += 2 + sol; if (sol <= 0) break;
         }
+        function addSprm(code, bytes) { grp.push(code & 0xFF, (code >> 8) & 0xFF); for (var bi = 0; bi < bytes.length; bi++) grp.push(bytes[bi]); }
+        if (pg.landscape != null && !present[0x301D]) addSprm(0x301D, [pg.landscape ? 2 : 1]);            // sprmSBOrientation
+        if (pg.cols && pg.cols > 1 && !present[0x500B]) addSprm(0x500B, [(pg.cols - 1) & 0xFF, ((pg.cols - 1) >> 8) & 0xFF]); // sprmSCcolumns (ccolM1)
+        var sepxU8 = new Uint8Array(2 + grp.length);
+        sepxU8[0] = grp.length & 0xFF; sepxU8[1] = (grp.length >> 8) & 0xFF; sepxU8.set(grp, 2);
+        var grown = new Uint8Array(newWd.length + sepxU8.length);
+        grown.set(newWd, 0); grown.set(sepxU8, newWd.length);
+        u32(newTbl, fcSepxPos, newWd.length);          // repoint SED.fcSepx to the relocated SEPX
+        newWd = grown;
       }
     }
 
