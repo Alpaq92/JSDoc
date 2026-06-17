@@ -15,9 +15,9 @@
  * Clean-room from [MS-CFB] (container) + [MS-DOC] (FIB / CLX / FKP / sprms).
  *
  * Writes back: paragraphs, character formatting (bold/italic/underline/strike/
- * size/colour as CHPX sprms) and tables (cell marks + sprmPFInTable / sprmPFTtp
- * / sprmTDefTable with borders). Not yet: per-run fonts (text uses the Normal
- * style's font) or embedded images.
+ * size/colour/font as CHPX sprms — fonts the skeleton lacks are appended to its
+ * SttbfFfn) and tables (cell marks + sprmPFInTable / sprmPFTtp / sprmTDefTable
+ * with borders). Not yet: embedded images.
  *
  * Verification: round-tripped through docToText (.model re-reads the table
  * cells) AND the independent word-extractor (test/styled.test.js / writer.test.js),
@@ -152,7 +152,7 @@
   // ---- character properties -> CHPX grpprl ([MS-DOC] sprms, inverse of the
   // reader's parseChpGrpprl). ToggleOperands are written as 0x01 (on).
   function sprm(b, code, operand) { b.push(code & 0xFF, (code >> 8) & 0xFF); for (var i = 0; i < operand.length; i++) b.push(operand[i] & 0xFF); }
-  function chpxGrpprl(r) {
+  function chpxGrpprl(r, ftc) {
     var b = [];
     if (r.b) sprm(b, 0x0835, [1]);            // sprmCFBold
     if (r.i) sprm(b, 0x0836, [1]);            // sprmCFItalic
@@ -160,10 +160,38 @@
     if (r.u) sprm(b, 0x2A3E, [1]);            // sprmCKul = 1 (single underline)
     if (r.size) { var hp = Math.round(r.size * 2); sprm(b, 0x4A43, [hp, hp >> 8]); }      // sprmCHps (half-points)
     if (r.color != null) sprm(b, 0x6870, [r.color, r.color >> 8, r.color >> 16, 0]);     // sprmCCv (COLORREF)
+    if (ftc != null) sprm(b, 0x4A4F, [ftc, ftc >> 8]);   // sprmCRgFtc0 (font index into SttbfFfn)
     return b;
   }
   // A Chpx in an FKP: [cb][grpprl]. null => use the FKP default (rgb = 0).
-  function chpxBlob(r) { var g = chpxGrpprl(r); if (!g.length) return null; var u = new Uint8Array(g.length + 1); u[0] = g.length; u.set(g, 1); return u; }
+  function chpxBlob(r, ftc) { var g = chpxGrpprl(r, ftc); if (!g.length) return null; var u = new Uint8Array(g.length + 1); u[0] = g.length; u.set(g, 1); return u; }
+
+  // ---- font table (SttbfFfn) -----------------------------------------------
+  // Read the skeleton's font names (FFNs are self-sized via cbFfnM1; name is
+  // UTF-16 at offset 40). Returns the existing names + where to bump the count.
+  function readFonts(tbl, fc, lcb) {
+    var dvT = new DataView(tbl.buffer, tbl.byteOffset, tbl.byteLength);
+    var p = fc, cDataOff = fc;
+    if (dvT.getUint16(p, true) === 0xFFFF) { p += 2; cDataOff = p; }
+    var cData = dvT.getUint16(p, true); p += 4;            // cData (2) + cbExtra (2)
+    var names = [], end = fc + lcb;
+    for (var i = 0; i < cData && p < end; i++) {
+      var ffnEnd = p + tbl[p] + 1, name = '';
+      for (var q = p + 40; q + 1 < ffnEnd && q + 1 <= end; q += 2) { var ch = tbl[q] | (tbl[q + 1] << 8); if (!ch) break; name += String.fromCharCode(ch); }
+      names.push(name); p = ffnEnd;
+    }
+    // `used` = bytes through the last FFN; append new fonts there (not after any
+    // trailing slack within lcb, which would desync the sequential read).
+    return { names: names, cData: cData, cDataOff: cDataOff - fc, used: p - fc, bytes: tbl.slice(fc, fc + lcb) };
+  }
+  // Build one FFN: cbFfnM1, flags (fTrueType), wWeight, then the UTF-16 name+NUL.
+  function buildFfn(name) {
+    name = name.slice(0, 100);
+    var size = 40 + (name.length + 1) * 2, u = new Uint8Array(size);
+    u[0] = size - 1; u[1] = 0x04; u16(u, 2, 400);          // cbFfnM1, fTrueType, wWeight=normal
+    for (var i = 0; i < name.length; i++) u16(u, 40 + i * 2, name.charCodeAt(i));
+    return u;
+  }
 
   // A PapxInFkp (cb=0 form): [0][cb'][GrpPrlAndIstd], where GrpPrlAndIstd is
   // istd (2 bytes, 0 = Normal) + grpprl, zero-padded to 2*cb' bytes.
@@ -255,6 +283,21 @@
     var PNORMAL = papxInFkp([]);
     var PCELL = papxInFkp(SPRM_FINTABLE);
     function papxTtp(ncols) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols))); }
+
+    // Font table: reuse the skeleton's fonts, append any the model introduces,
+    // and reference each run's font via sprmCRgFtc0. (If the skeleton has no
+    // SttbfFfn, fonts are skipped and text uses the Normal style's typeface.)
+    var ffnFc = pairFc(15), ffnLcb = pairLcb(15);
+    var ffnInfo = (ffnLcb >= 6 && ffnFc + ffnLcb <= tbl.length) ? readFonts(tbl, ffnFc, ffnLcb) : null;
+    var fontMap = {}, newFfns = [], nextFtc = ffnInfo ? ffnInfo.cData : 0;
+    if (ffnInfo) ffnInfo.names.forEach(function (n, i) { if (fontMap[n.toLowerCase()] == null) fontMap[n.toLowerCase()] = i; });
+    function ftcFor(name) {
+      if (!ffnInfo || !name) return null;
+      var key = name.toLowerCase();
+      if (fontMap[key] != null) return fontMap[key];
+      fontMap[key] = nextFtc; newFfns.push(buildFfn(name)); return nextFtc++;
+    }
+
     // Build the character stream with per-run CHPX and per-paragraph PAPX. Table
     // cells end in a cell mark (0x07) and each row ends with an empty terminator
     // paragraph; every cell/terminator paragraph is flagged in-table.
@@ -263,7 +306,7 @@
       if (!run.text) return;
       var s0 = codes.length;
       for (var i = 0; i < run.text.length; i++) codes.push(run.text.charCodeAt(i));
-      chpxRuns.push({ s: s0, e: codes.length, blob: chpxBlob(run) });
+      chpxRuns.push({ s: s0, e: codes.length, blob: chpxBlob(run, ftcFor(run.font)) });
     }
     function emitMark(code) { codes.push(code); chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: null }); }
     function endPara(blob) { papxParas.push({ s: paraStart, e: codes.length, blob: blob }); paraStart = codes.length; }
@@ -300,13 +343,24 @@
     u32(newWd, rgLwStart + 3 * 4, ccp);            // ccpText
     u32(newWd, rgLwStart + 0 * 4, newWd.length);   // cbMac
 
-    // ---- new 1Table: skeleton table + CLX + PlcfBteChpx + PlcfBtePapx -------
+    // ---- new 1Table: skeleton table + appended CLX / PlcfBteChpx / PlcfBtePapx
+    // (+ a grown SttbfFfn when the model introduced new fonts) ----------------
     var clx = new Uint8Array(21);
     clx[0] = 0x02; u32(clx, 1, 16); u32(clx, 5, 0); u32(clx, 9, ccp); u16(clx, 13, 0); u32(clx, 15, T); u16(clx, 19, 0);
     function plcfBte(p) { var b = new Uint8Array(p.fcs.length * 4 + p.pns.length * 4); for (var i = 0; i < p.fcs.length; i++) u32(b, i * 4, p.fcs[i]); for (i = 0; i < p.pns.length; i++) u32(b, p.fcs.length * 4 + i * 4, p.pns[i]); return b; }
-    var pbteC = plcfBte(chpx), pbteP = plcfBte(papx);
-    var clxOff = tbl.length, pbteCOff = clxOff + clx.length, pbtePOff = pbteCOff + pbteC.length;
-    var newTbl = concat([tbl, clx, pbteC, pbteP], tbl.length + clx.length + pbteC.length + pbteP.length);
+    var newFfn = null;
+    if (ffnInfo && newFfns.length) {
+      var head = ffnInfo.bytes.slice(0, ffnInfo.used);
+      var extra = newFfns.reduce(function (a, f) { return a + f.length; }, 0);
+      newFfn = concat([head].concat(newFfns), head.length + extra);
+      u16(newFfn, ffnInfo.cDataOff, ffnInfo.cData + newFfns.length);   // bump cData
+    }
+    var blocks = [], off = tbl.length;
+    function append(bytes) { var o = off; blocks.push(bytes); off += bytes.length; return o; }
+    var clxOff = append(clx), pbteCOff = append(plcfBte(chpx)), pbtePOff = append(plcfBte(papx));
+    var pbteC = blocks[1], pbteP = blocks[2];
+    var ffnOff = newFfn ? append(newFfn) : -1;
+    var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
     if (sedLcb >= 8) u32(newTbl, sedFc + ((sedLcb - 4) / 16) * 4, ccp);
@@ -314,6 +368,7 @@
     setPair(33, clxOff, clx.length);     // Clx
     setPair(12, pbteCOff, pbteC.length); // PlcfBteChpx
     setPair(13, pbtePOff, pbteP.length); // PlcfBtePapx
+    if (ffnOff >= 0) setPair(15, ffnOff, newFfn.length); // SttbfFfn (grown)
 
     return buildCfb([{ name: 'WordDocument', data: newWd }, { name: tableName, data: newTbl }]);
   }

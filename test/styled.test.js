@@ -21,7 +21,7 @@ console.log('styled writer — model round-trip\n');
 
 // 1) Hand-built styled model -> every run property survives a re-parse.
 var out = textToDoc([
-  { runs: [{ text: 'Title', b: true, size: 16, color: 0x123456 }], kind: 'p' },
+  { runs: [{ text: 'Title', b: true, size: 16, color: 0x123456, font: 'Courier New' }], kind: 'p' },
   { runs: [{ text: 'plain ' }, { text: 'italic', i: true }, { text: ' ' }, { text: 'under', u: true }, { text: ' ' }, { text: 'struck', strike: true }], kind: 'p' }
 ]);
 check('hand-built: produces a CFB', out[0] === 0xD0 && out[1] === 0xCF);
@@ -32,6 +32,7 @@ check('hand-built: underline', /text-decoration:[^"]*underline/.test(html));
 check('hand-built: strike', /text-decoration:[^"]*line-through/.test(html));
 check('hand-built: size 16pt', /font-size:16pt/.test(html));
 check('hand-built: colour', /color:rgb\(86,\s*52,\s*18\)/.test(html));   // 0x123456 COLORREF -> rgb(0x56,0x34,0x12)
+check('hand-built: font (appended to table)', /font-family:'Courier New'/.test(html));
 check('hand-built: text intact', docToText(out).replace(/\r?\n/g, ' ').indexOf('Title plain italic under struck') !== -1);
 
 // 2) Round-trip the license sample's styled model; tables must come back as tables.
