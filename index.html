@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>JSDoc — legacy Word .doc text extractor (in-browser)</title>
+<title>JSDoc — legacy Word .doc reader & writer (in-browser)</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --ink: #1c2230; --muted: #6b7280;
@@ -99,7 +99,7 @@
   <h1>JSDoc</h1>
   <p class="sub">
     Reads — and writes — legacy Microsoft Word <strong>97–2003 binary <code>.doc</code></strong>
-    files entirely in your browser: text, formatting, tables, footnotes/headers, and images.
+    files entirely in your browser: text, formatting, tables, lists, spacing, footnotes/headers, and images.
     Pure JavaScript, zero dependencies, clean-room from
     the <a href="https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/ccd7b486-7881-484c-a137-51170af7cc22" target="_blank" rel="noopener">[MS-DOC]</a>
     /
@@ -144,9 +144,10 @@
   <footer>
     Source &amp; tests:
     <a href="https://github.com/Alpaq92/JSDoc" target="_blank" rel="noopener">github.com/Alpaq92/JSDoc</a>.
-    Shows body text, footnotes/headers, character styling, tables and embedded PNG/JPEG, with
-    tracked deletions dropped; <strong>Download .doc</strong> writes a real (text-only) Word file
-    back. It is <em>not</em> a pixel-faithful render — exact page layout and WMF/EMF images need a
+    Shows body text, footnotes/headers, character styling, tables, lists and embedded PNG/JPEG, with
+    tracked deletions dropped; <strong>Download .doc</strong> writes a real Word file back with that
+    formatting intact — styling, tables, lists, alignment, spacing/indentation, and inline images. It
+    is <em>not</em> a pixel-faithful render — exact page layout and WMF/EMF images need a
     full engine — and it returns nothing for Word 6/95, encrypted, or non-<code>.doc</code> files
     (the host's download fallback).
   </footer>
