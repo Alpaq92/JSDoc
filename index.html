@@ -80,6 +80,9 @@
   /* A text box: a floated bordered box holding its content, where it's anchored. */
   .docbox { float: left; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; margin: 2px 14px 6px 0; background: rgba(127,127,127,.06); max-width: 260px; }
   .docbox p { margin: 0; }
+  /* A text box placed at its real page coordinates: overlay the body text. */
+  .docbody { position: relative; }
+  .docbox.placed { position: absolute; float: none; margin: 0; z-index: 2; max-width: 45%; background: var(--card); box-shadow: 0 2px 10px rgba(0,0,0,.22); }
   /* Document properties (title/author/...) as a quiet metadata bar above the body. */
   .docprops { font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 12px; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
@@ -402,10 +405,23 @@
     // inside would get hoisted out by the browser.
     tbxBoxHtml = (hasTbx && model && model.textboxes) ? model.textboxes.filter(function (p) { return (p.runs || []).some(function (r) { return r.text || r.image; }); }).map(function (p) { return runsHtml(p.runs); }).join("<br>") : "";
     var plain = doc.body, html = (model && model.body) ? renderModel(model.body) : toHtml(doc.html.body, true), extras = [];
-    // A floating text box floats at the top-left of the body and the text flows past
-    // it (a centred image stays centred) — matching how an editor places it, rather
-    // than gluing it to whatever its text anchor happens to sit next to.
-    if (tbxBoxHtml) html = '<div class="docbox" title="floating text box">' + tbxBoxHtml + "</div>" + html;
+    // A floating text box is placed at its real page position (its FSPA bounding
+    // box, read from the drawing record), overlaying the body text the way a word
+    // processor floats it — not glued to wherever its text anchor falls. The page
+    // size scales twips → a fraction of the rendered body. Falls back to a top float.
+    if (tbxBoxHtml) {
+      var shp = (model && model.shapes && model.shapes[0]) ? model.shapes[0] : null;
+      var pg = (model && model.page) ? model.page : null;
+      var pw = (pg && pg.width) ? pg.width : 11906, ph = (pg && pg.height) ? pg.height : 16838;
+      if (shp && shp.xL != null) {
+        var lp = Math.max(0, Math.min(86, shp.xL / pw * 100)).toFixed(1);
+        var tp = Math.max(0, shp.yT / ph * 100).toFixed(1);
+        var ttl = "floating text box · " + (shp.xL / 1440).toFixed(1) + "″ from left, " + (shp.yT / 1440).toFixed(1) + "″ down";
+        html = '<div class="docbody"><div class="docbox placed" title="' + ttl + '" style="left:' + lp + "%;top:" + tp + '%;">' + tbxBoxHtml + "</div>" + html + "</div>";
+      } else {
+        html = '<div class="docbox" title="floating text box">' + tbxBoxHtml + "</div>" + html;
+      }
+    }
     // Document properties (title/author/...) as a small metadata bar above the body.
     if (model && model.props) {
       var mp = model.props, bits = [];
