@@ -72,8 +72,9 @@
   #rich p, #edit p { margin: 0 0 10px; }
   #rich p:last-child, #edit p:last-child { margin-bottom: 0; }
   #rich h3.sec, #edit h3.sec { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 20px 0 8px; padding-top: 12px; border-top: 1px solid var(--line); }
-  .gallery { display: flex; flex-wrap: wrap; gap: 10px; }
-  .gallery img { max-width: 260px; max-height: 220px; border: 1px solid var(--line); border-radius: 6px; background: #fff; object-fit: contain; }
+  /* Inline images in the Formatted view — sit where they belong (so a centred
+     image is centred via its paragraph's text-align). */
+  .docimg { max-width: 100%; max-height: 300px; height: auto; vertical-align: top; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -226,6 +227,63 @@
     return html || "<p><em>(document contains no main-body text)</em></p>";
   }
 
+  // Render a docToText.model() story faithfully: paragraphs keep their alignment,
+  // runs their character styling, images appear INLINE where they belong (so a
+  // centred image stays centred), lists become <ul>/<ol>, tables a <table>.
+  var ALIGN = ["", "center", "right", "justify"];
+  function runStyle(r) {
+    var css = "";
+    if (r.b) css += "font-weight:bold;";
+    if (r.i) css += "font-style:italic;";
+    var deco = (r.u ? "underline " : "") + (r.strike ? "line-through" : "");
+    if (deco.trim()) css += "text-decoration:" + deco.trim() + ";";
+    if (r.size) css += "font-size:" + r.size + "pt;";
+    if (r.font) css += "font-family:'" + String(r.font).replace(/['\\<>]/g, "") + "';";
+    if (r.color != null) css += "color:rgb(" + (r.color & 255) + "," + ((r.color >> 8) & 255) + "," + ((r.color >> 16) & 255) + ");";
+    return css;
+  }
+  function runsHtml(runs) {
+    var s = "";
+    for (var i = 0; i < runs.length; i++) {
+      var r = runs[i];
+      if (r.image && r.image.bytes) {
+        try { s += '<img class="docimg" src="' + URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mime })) + '" alt="embedded image">'; } catch (e) { }
+      } else if (r.text) {
+        var css = runStyle(r);
+        s += css ? '<span style="' + css + '">' + esc(r.text) + "</span>" : esc(r.text);
+      }
+    }
+    return s;
+  }
+  function renderModel(paras) {
+    var html = "", i = 0, listTag = null;
+    function closeList() { if (listTag) { html += "</" + listTag + ">"; listTag = null; } }
+    while (i < paras.length) {
+      var p = paras[i];
+      if (p.kind === "cell" || p.kind === "rowEnd") {
+        closeList();
+        html += '<table class="doc-table"><tbody><tr>';
+        while (i < paras.length && (paras[i].kind === "cell" || paras[i].kind === "rowEnd")) {
+          html += "<td>" + runsHtml(paras[i].runs) + "</td>";
+          var end = paras[i].kind === "rowEnd"; i++;
+          if (end) { html += "</tr>"; if (i < paras.length && (paras[i].kind === "cell" || paras[i].kind === "rowEnd")) html += "<tr>"; }
+        }
+        html += "</tbody></table>";
+      } else {
+        var al = p.align ? ' style="text-align:' + ALIGN[p.align] + '"' : "";
+        var inner = runsHtml(p.runs);
+        if (p.list) {
+          var tag = p.list.kind === "number" ? "ol" : "ul";
+          if (listTag !== tag) { closeList(); html += "<" + tag + ">"; listTag = tag; }
+          html += "<li" + al + ">" + (inner || "&nbsp;") + "</li>";
+        } else { closeList(); html += "<p" + al + ">" + (inner || "<br>") + "</p>"; }
+        i++;
+      }
+    }
+    closeList();
+    return html || "<p><em>(document contains no main-body text)</em></p>";
+  }
+
   function setView(mode) {
     // Lazily seed the editable view from the formatted HTML the first time it's opened,
     // so edits aren't wiped when toggling between views.
@@ -281,33 +339,24 @@
       ["headers", "Headers & footers"], ["annotations", "Comments"],
       ["textboxes", "Text boxes"], ["headerTextboxes", "Header text boxes"]
     ];
-    // Formatted view uses the styled HTML (doc.html.*); plain text uses doc.*.
-    var plain = doc.body, html = toHtml(doc.html.body, true), extras = [];
+    // Formatted view: render the styled model faithfully — paragraph alignment,
+    // inline images (a centred image stays centred), lists and tables. Falls
+    // back to the flattened styled HTML if the model isn't available.
+    var model = null; try { model = docToText.model ? docToText.model(buffer) : null; } catch (e) { }
+    var plain = doc.body, html = (model && model.body) ? renderModel(model.body) : toHtml(doc.html.body, true), extras = [];
     for (var s = 0; s < STORIES.length; s++) {
       var key = STORIES[s][0], v = doc[key];
       if (v && v.replace(/\s+/g, "")) {
         extras.push(STORIES[s][1]);
         plain += "\n\n" + STORIES[s][1] + ":\n" + v;
-        html += '<h3 class="sec">' + esc(STORIES[s][1]) + "</h3>" + toHtml(doc.html[key], true);
+        html += '<h3 class="sec">' + esc(STORIES[s][1]) + "</h3>" + ((model && model[key]) ? renderModel(model[key]) : toHtml(doc.html[key], true));
       }
     }
-
-    // Embedded raster images (best-effort PNG/JPEG carving), shown as a gallery.
-    var imgs = docToText.images(buffer) || [];
-    if (imgs.length) {
-      html += '<h3 class="sec">Images (' + imgs.length + ')</h3><div class="gallery">';
-      for (var im = 0; im < imgs.length; im++) {
-        var url = URL.createObjectURL(new Blob([imgs[im].bytes], { type: imgs[im].mime }));
-        html += '<img src="' + url + '" alt="embedded image" loading="lazy">';
-      }
-      html += '</div>';
-    }
+    var imgs = docToText.images(buffer) || []; // for the meta count; images render inline above
 
     lastText = plain;
-    // Styled model (runs + table structure) so "Download .doc" can round-trip
-    // the formatting, not just the text.
-    try { lastModel = (docToText.model && docToText.model(buffer) || {}).body || null; }
-    catch (e) { lastModel = null; }
+    // Reuse the model computed above so "Download .doc" round-trips the formatting.
+    lastModel = model && model.body || null;
     meta.innerHTML = "<strong>" + esc(name) + "</strong> " +
       '<span class="badge ok">extracted</span> &nbsp;' +
       esc(doc.body.length.toLocaleString()) + " body chars" +
