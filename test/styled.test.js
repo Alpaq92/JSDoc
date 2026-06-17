@@ -193,6 +193,18 @@ docToText.model(icoDoc).body.forEach(function (p) { (p.runs || []).forEach(funct
 check('sprmCIco palette colour maps to RGB in the model (red)', icoAt >= 0 && !!icoRun && icoRun.color === 0x0000FF);
 check('sprmCIco palette colour shows in the styled HTML', /rgb\(255,\s*0,\s*0\)/.test(docToText.html(icoDoc).body));
 
+// 15) Document properties: title/subject/author written into a \x05SummaryInformation
+// property set and read back from the model. (TextMaker's COM confirms it reads them
+// too: BuiltInDocumentProperties Title/Author/Subject.)
+var propDoc = textToDoc({ body: [{ runs: [{ text: 'X' }], kind: 'p' }], props: { title: 'My Title', author: 'Jane Doe', subject: 'Subj' } });
+var pr = docToText.model(propDoc).props;
+check('document properties round-trip (SummaryInformation)', !!pr && pr.title === 'My Title' && pr.author === 'Jane Doe' && pr.subject === 'Subj');
+check('a doc with no properties carries no .props', docToText.model(textToDoc('plain')).props === undefined);
+// The reader also parses a real word processor's property set (the bundled sample
+// carries an author), proving it's not just reading back our own writer's bytes.
+var realProps = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'detailed-sample.doc'))).props;
+check('detailed-sample author parses from its real SummaryInformation', !!realProps && typeof realProps.author === 'string' && realProps.author.length > 0);
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).

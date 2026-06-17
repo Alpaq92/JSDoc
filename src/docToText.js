@@ -450,6 +450,9 @@
     // Page setup: the first section's properties (margins, page size, orientation).
     var page = parseSection(tableBytes, fibRgFcLcbStart, dv, wd);
     if (page) doc.model.page = page;
+    // Document properties (title/author/...) from the \x05SummaryInformation stream.
+    var props = parseSummaryInfo(cfb);
+    if (props) doc.model.props = props;
     return doc;
   }
 
@@ -795,6 +798,40 @@
       var n = Math.floor(lcb / 4), dv = new DataView(table.buffer, table.byteOffset, table.byteLength), cps = [];
       for (var i = 0; i < n; i++) cps.push(dv.getUint32(fc + i * 4, true));
       return cps;
+    } catch (e) { return null; }
+  }
+
+  // Document properties from the \x05SummaryInformation stream (an [MS-OLEPS]
+  // property set): title/subject/author/keywords/comments. Reads the property-set
+  // offset from the header, then walks its (propId, offset) table for the VT_LPSTR
+  // (or VT_LPWSTR) string values. Best-effort; returns null if absent/unreadable.
+  function parseSummaryInfo(cfb) {
+    try {
+      var entry = cfb.byName['\x05SummaryInformation'];
+      if (!entry) return null;
+      var s = cfb.getStream(entry);                              // byName holds the dir entry; read its bytes
+      if (!s || s.length < 48) return null;
+      var dv = new DataView(s.buffer, s.byteOffset, s.byteLength);
+      if (dv.getUint16(0, true) !== 0xFFFE) return null;          // byte-order mark
+      var ps = dv.getUint32(44, true);                            // offset to the property set (28-byte header + 16-byte FMTID)
+      if (ps + 8 > s.length) return null;
+      var num = dv.getUint32(ps + 4, true);
+      if (num < 1 || num > 64) return null;
+      var names = { 2: 'title', 3: 'subject', 4: 'author', 5: 'keywords', 6: 'comments' }, out = {};
+      for (var i = 0; i < num; i++) {
+        var ent = ps + 8 + i * 8;
+        if (ent + 8 > s.length) break;
+        var pid = dv.getUint32(ent, true), off = ps + dv.getUint32(ent + 4, true);
+        if (!names[pid] || off + 8 > s.length) continue;
+        var type = dv.getUint32(off, true), cch = dv.getUint32(off + 4, true);
+        if ((type !== 0x1E && type !== 0x1F) || cch < 1) continue; // VT_LPSTR / VT_LPWSTR
+        var str = '';
+        if (type === 0x1E) { if (off + 8 + cch > s.length) continue; for (var c = 0; c < cch - 1; c++) str += String.fromCharCode(s[off + 8 + c]); }
+        else { if (off + 8 + cch * 2 > s.length) continue; for (var c2 = 0; c2 < cch - 1; c2++) str += String.fromCharCode(dv.getUint16(off + 8 + c2 * 2, true)); }
+        str = str.replace(/\0+$/, '');
+        if (str) out[names[pid]] = str;
+      }
+      return Object.keys(out).length ? out : null;
     } catch (e) { return null; }
   }
 
