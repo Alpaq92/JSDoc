@@ -359,7 +359,7 @@
     // Main body, plus any non-empty extra stories (footnotes, headers, …).
     var STORIES = [
       ["footnotes", "Footnotes"], ["endnotes", "Endnotes"],
-      ["headers", "Headers & footers"], ["annotations", "Comments"],
+      ["annotations", "Comments"],
       ["textboxes", "Text boxes"], ["headerTextboxes", "Header text boxes"]
     ];
     // Formatted view: render the styled model faithfully — paragraph alignment,
@@ -375,6 +375,10 @@
         html += '<h3 class="sec">' + esc(STORIES[s][1]) + "</h3>" + ((model && model[key]) ? renderModel(model[key]) : toHtml(doc.html[key], true));
       }
     }
+    // Page header & footer (split out of the header document, separators dropped).
+    function flatStory(ps) { return ps.map(function (p) { return (p.runs || []).map(function (r) { return r.text || ""; }).join(""); }).join("\n"); }
+    if (model && model.header) { extras.push("Header"); plain += "\n\nHeader:\n" + flatStory(model.header); html += '<h3 class="sec">Header</h3>' + renderModel(model.header); }
+    if (model && model.footer) { extras.push("Footer"); plain += "\n\nFooter:\n" + flatStory(model.footer); html += '<h3 class="sec">Footer</h3>' + renderModel(model.footer); }
     var imgs = docToText.images(buffer) || []; // for the meta count; images render inline above
 
     lastText = plain;
