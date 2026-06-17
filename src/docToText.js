@@ -418,6 +418,9 @@
       if (r.spB) pp.spB = r.spB;
       if (r.spA) pp.spA = r.spA;
       if (r.line) { pp.line = r.line; pp.lineMult = r.lineMult || 0; }
+      if (r.keepN) pp.keepNext = 1;       // keep with next paragraph
+      if (r.keepL) pp.keepLines = 1;      // keep lines together
+      if (r.pgBrk) pp.pageBreak = 1;      // page break before
       return Object.keys(pp).length ? pp : null;
     }
     // The table row's column boundaries (rgdxaCenter twips), from sprmTDefTable on
@@ -735,7 +738,7 @@
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
       var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
-      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null;
+      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0;
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
@@ -750,6 +753,9 @@
             if (sc === 0x2403 || sc === 0x2461) jc = wd[gp + 2];        // sprmPJc80 / sprmPJc
             else if (sc === 0x460B) ilfo = wd[gp + 2] | (wd[gp + 3] << 8); // sprmPIlfo (list)
             else if (sc === 0x260A) ilvl = wd[gp + 2];                     // sprmPIlvl (level)
+            else if (sc === 0x2405) keepL = wd[gp + 2];                    // sprmPFKeep (keep lines together)
+            else if (sc === 0x2406) keepN = wd[gp + 2];                    // sprmPFKeepFollow (keep with next)
+            else if (sc === 0x2407) pgBrk = wd[gp + 2];                    // sprmPFPageBreakBefore
             else if (sc === 0x840F) indL = dv.getInt16(gp + 2, true);      // sprmPDxaLeft
             else if (sc === 0x840E) indR = dv.getInt16(gp + 2, true);      // sprmPDxaRight
             else if (sc === 0x8411) ind1 = dv.getInt16(gp + 2, true);      // sprmPDxaLeft1 (first line; <0 = hanging)
@@ -765,7 +771,7 @@
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk });
     }
   }
 

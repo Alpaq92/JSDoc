@@ -205,6 +205,19 @@ check('a doc with no properties carries no .props', docToText.model(textToDoc('p
 var realProps = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'detailed-sample.doc'))).props;
 check('detailed-sample author parses from its real SummaryInformation', !!realProps && typeof realProps.author === 'string' && realProps.author.length > 0);
 
+// 16) Paragraph keep/break flags: keep-with-next, keep-lines-together and page-break-
+// before (sprmPFKeepFollow / sprmPFKeep / sprmPFPageBreakBefore) round-trip via pp;
+// plain paragraphs stay bare. (Round-trip + opens-clean; invisible to TextMaker's COM.)
+var kbDoc = textToDoc([
+  { runs: [{ text: 'H' }], kind: 'p', pp: { keepNext: 1 } },
+  { runs: [{ text: 'B' }], kind: 'p', pp: { keepLines: 1, pageBreak: 1 } },
+  { runs: [{ text: 'P' }], kind: 'p' }
+]);
+var kb = docToText.model(kbDoc).body;
+check('keep-with-next round-trips (sprmPFKeepFollow)', !!kb[0].pp && kb[0].pp.keepNext === 1 && !kb[0].pp.keepLines);
+check('keep-together + page-break-before round-trip', !!kb[1].pp && kb[1].pp.keepLines === 1 && kb[1].pp.pageBreak === 1);
+check('a plain paragraph carries no keep/break flags', kb[2].pp == null);
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).

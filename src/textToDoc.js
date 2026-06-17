@@ -412,6 +412,9 @@
         if (pp.spB) s16(0x13, 0xA4, pp.spB);                   // sprmPDyaBefore
         if (pp.spA) s16(0x14, 0xA4, pp.spA);                   // sprmPDyaAfter
         if (pp.line) { g.push(0x12, 0x64, pp.line & 0xFF, (pp.line >> 8) & 0xFF, pp.lineMult & 0xFF, (pp.lineMult >> 8) & 0xFF); } // sprmPDyaLine (LSPD)
+        if (pp.keepLines) g.push(0x05, 0x24, 1);               // sprmPFKeep (keep lines together)
+        if (pp.keepNext) g.push(0x06, 0x24, 1);                // sprmPFKeepFollow (keep with next)
+        if (pp.pageBreak) g.push(0x07, 0x24, 1);               // sprmPFPageBreakBefore
       }
       return g.length ? papxInFkp(g) : PNORMAL;
     }
