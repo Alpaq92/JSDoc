@@ -417,11 +417,14 @@
       if (r.line) { pp.line = r.line; pp.lineMult = r.lineMult || 0; }
       return Object.keys(pp).length ? pp : null;
     }
+    // The table row's column boundaries (rgdxaCenter twips), from sprmTDefTable on
+    // the row-terminator paragraph; null for non-table paragraphs.
+    function paraTblw(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblw) ? r.tblw : null; }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraTblw, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
     }
     // Split the header document (PlcfHdd) into the real page header & footer for
     // the first section — skipping the footnote/endnote separator stories (0-5)
@@ -435,7 +438,7 @@
         return -1;
       };
       var grab = function (k) {
-        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, null);
+        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraTblw, null);
       };
       var hK = pick([7, 10, 6]), fK = pick([9, 11, 8]);   // header: odd/first/even; footer: odd/first/even
       if (hK >= 0) doc.model.header = grab(hK);
@@ -726,7 +729,7 @@
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
       var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
-      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0;
+      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null;
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
@@ -747,11 +750,16 @@
             else if (sc === 0xA413) spB = dv.getInt16(gp + 2, true);       // sprmPDyaBefore
             else if (sc === 0xA414) spA = dv.getInt16(gp + 2, true);       // sprmPDyaAfter
             else if (sc === 0x6412) { line = dv.getInt16(gp + 2, true); lineMult = wd[gp + 4] | (wd[gp + 5] << 8); } // sprmPDyaLine (LSPD)
+            else if (sc === 0xD608) {                                      // sprmTDefTable: capture rgdxaCenter (column boundaries, twips)
+              var tcb = wd[gp + 2] | (wd[gp + 3] << 8); ol = 2 + tcb;      // 2-byte cb -- the spra=6 exception sprmOperandLen doesn't know
+              var itc = wd[gp + 4];                                        // itcMac (number of columns)
+              if (itc > 0 && itc < 64 && gp + 5 + (itc + 1) * 2 <= pageOff + 512) { tblw = []; for (var tt = 0; tt <= itc; tt++) tblw.push(dv.getInt16(gp + 5 + tt * 2, true)); }
+            }
             gp += 2 + ol; if (ol <= 0) break;
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw });
     }
   }
 
@@ -979,8 +987,8 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
-    var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0;
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
+    var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0, lastCellFc = null;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
     function props(p) {
@@ -997,8 +1005,10 @@
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
     function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
-    function endPara(kind, fc) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; paras.push(par); runs = []; curKey = null; curProps = null; }
-    function flushCells() { if (!cells) return; endPara(cells === 1 ? 'cell' : 'rowEnd'); cells = 0; }
+    function endPara(kind, fc, tblw) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; paras.push(par); runs = []; curKey = null; curProps = null; }
+    // The row's column boundaries (rgdxaCenter) live in the PAPX of the row-terminator
+    // mark (the last 0x07 seen), so resolve them there and attach to the rowEnd cell.
+    function flushCells() { if (!cells) return; var k = cells === 1 ? 'cell' : 'rowEnd'; var tw = (k === 'rowEnd' && paraTblw && lastCellFc != null) ? paraTblw(lastCellFc) : null; endPara(k, null, tw); cells = 0; }
     function feed(code, fc, cp) {
       // A footnote reference (0x02) whose CP is listed in PlcffndRef: record an
       // anchor run so the writer can re-place it and re-link the footnote text.
@@ -1012,7 +1022,7 @@
       if (code === 0x14) { flushCells(); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; if (fieldStack.length === 1) { inInstr = false; curUrl = parseHyperlink(instr); curKey = null; } return; }
       if (code === 0x15) { flushCells(); flushRun(); if (fieldStack.length) fieldStack.pop(); if (fieldStack.length === 0) { curUrl = null; curKey = null; } return; }
       for (var i = 0; i < fieldStack.length; i++) if (fieldStack[i]) { if (inInstr) { var ic = mapChar(code); if (ic) instr += ic; } return; }
-      if (code === 0x07) { cells++; return; }
+      if (code === 0x07) { cells++; lastCellFc = fc; return; }
       flushCells();
       if (code === 0x0A || code === 0x0B || code === 0x0C || code === 0x0D) { endPara('p', fc); return; }
       // picture placeholder (0x01): emit an image run, paired in order with the

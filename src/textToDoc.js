@@ -239,11 +239,13 @@
     return u;
   }
   // sprmTDefTable (0xD608) operand: itcMac, then rgdxaCenter (ncols+1 signed
-  // twips, equal columns across the text width) and rgTc80 (one 20-byte cell
-  // descriptor each — zero-filled = borderless). spra=6 => 2-byte length prefix.
-  function tDefTableSprm(ncols) {
+  // twips) and rgTc80 (one 20-byte cell descriptor each — zero-filled =
+  // borderless). spra=6 => 2-byte length prefix. Uses the source row's preserved
+  // column boundaries when supplied, else equal columns across the text width.
+  function tDefTableSprm(ncols, bounds) {
+    var useB = bounds && bounds.length === ncols + 1;
     var width = 9000, op = [ncols & 0xFF];
-    for (var i = 0; i <= ncols; i++) { var x = Math.round(i * width / ncols) & 0xFFFF; op.push(x & 0xFF, (x >> 8) & 0xFF); }
+    for (var i = 0; i <= ncols; i++) { var x = (useB ? bounds[i] : Math.round(i * width / ncols)) & 0xFFFF; op.push(x & 0xFF, (x >> 8) & 0xFF); }
     var brc = [6, 1, 0, 0];                 // Brc80: 3/4pt single line, auto colour, on all 4 sides
     for (i = 0; i < ncols; i++) {
       op.push(0, 0, 0, 0);                  // TC80: tcgrf=0, wWidth=0 (auto)
@@ -303,7 +305,9 @@
   // the skeleton's built-in LFOs: bullet -> ilfo 2, number -> ilfo 1.
   function mapPara(p) {
     var li = p.list, ilfo = li ? (li.kind === 'number' ? 1 : 2) : (p.ilfo || 0), ilvl = li ? (li.ilvl || 0) : (p.ilvl || 0);
-    return { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl, pp: p.pp || null };
+    var m = { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl, pp: p.pp || null };
+    if (p.tblw) m.tblw = p.tblw;   // preserved table column boundaries (rgdxaCenter) on a rowEnd
+    return m;
   }
   // Non-body stories from a model object (the footnotes array, etc.), mapped.
   function storyParas(input, key) {
@@ -347,7 +351,7 @@
     // terminator paragraph carrying the column definition.
     var PNORMAL = papxInFkp([]);
     var PCELL = papxInFkp(SPRM_FINTABLE);
-    function papxTtp(ncols) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols))); }
+    function papxTtp(ncols, bounds) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols, bounds))); }
     // Normal paragraph PAPX with optional list membership (sprmPIlvl 0x260A +
     // sprmPIlfo 0x460B, referencing the skeleton's list tables) and alignment
     // (sprmPJc80 0x2403: 0 left / 1 centre / 2 right / 3 justify).
@@ -456,7 +460,7 @@
       if (par.kind === 'cell') { emitMark(0x07); endPara(PCELL); cellsInRow++; }
       else if (par.kind === 'rowEnd') {
         emitMark(0x07); endPara(PCELL); cellsInRow++;       // final cell of the row
-        emitMark(0x07); endPara(papxTtp(cellsInRow));       // empty row-terminator paragraph
+        emitMark(0x07); endPara(papxTtp(cellsInRow, par.tblw));  // empty row-terminator paragraph (preserves column widths)
         cellsInRow = 0;
       } else { emitMark(0x0D); endPara(papxForP(par)); cellsInRow = 0; }  // normal paragraph (alignment + list)
     }

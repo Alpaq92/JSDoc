@@ -157,6 +157,24 @@ var pgm = docToText.model(pgDoc).page;
 // the writer actually applied input.page.
 check('page setup round-trips (margins + page size)', !!pgm && pgm.top === 1440 && pgm.bottom === 1440 && pgm.left === 1800 && pgm.right === 1800 && pgm.width === 12240 && pgm.height === 15840);
 
+// 13) Table column widths: a row's rgdxaCenter (sprmTDefTable) round-trips, so
+// unequal columns aren't flattened to equal widths.
+var twDoc = textToDoc([
+  { runs: [{ text: 'A' }], kind: 'cell' },
+  { runs: [{ text: 'B' }], kind: 'cell' },
+  { runs: [{ text: 'C' }], kind: 'rowEnd', tblw: [0, 1500, 4000, 9000] }
+]);
+var twRows = docToText.model(twDoc).body.filter(function (p) { return p.kind === 'rowEnd'; });
+check('table column widths round-trip (sprmTDefTable rgdxaCenter)', twRows.length === 1 && JSON.stringify(twRows[0].tblw) === '[0,1500,4000,9000]');
+// The real sample's three unequal columns survive intact (not flattened to equal).
+var twSample = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'detailed-sample.doc')));
+var twOrig = twSample.body.filter(function (p) { return p.kind === 'rowEnd'; });
+var twRe = docToText.model(textToDoc(twSample)).body.filter(function (p) { return p.kind === 'rowEnd'; });
+check('detailed-sample column widths survive round-trip (unequal preserved)',
+  twOrig.length > 0 && twRe.length === twOrig.length &&
+  JSON.stringify(twRe[0].tblw) === JSON.stringify(twOrig[0].tblw) &&
+  JSON.stringify(twOrig[0].tblw) !== JSON.stringify([0, 3000, 6000, 9000]));
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).
