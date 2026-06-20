@@ -426,11 +426,13 @@
     // The table row's column boundaries (rgdxaCenter twips), from sprmTDefTable on
     // the row-terminator paragraph; null for non-table paragraphs.
     function paraTblw(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblw) ? r.tblw : null; }
+    function paraTblShd(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblShd) ? r.tblShd : null; }
+    function paraTblMerge(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblMerge) ? r.tblMerge : null; }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraTblw, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
     }
     // Split the header document (PlcfHdd) into the real page header & footer for
     // the first section — skipping the footnote/endnote separator stories (0-5)
@@ -444,7 +446,7 @@
         return -1;
       };
       var grab = function (k) {
-        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraTblw, null);
+        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, null);
       };
       var hK = pick([7, 10, 6]), fK = pick([9, 11, 8]);   // header: odd/first/even; footer: odd/first/even
       if (hK >= 0) doc.model.header = grab(hK);
@@ -745,7 +747,7 @@
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
       var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
-      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0;
+      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0, tblShd = null, tblMerge = null;
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
@@ -770,15 +772,31 @@
             else if (sc === 0xA414) spA = dv.getInt16(gp + 2, true);       // sprmPDyaAfter
             else if (sc === 0x6412) { line = dv.getInt16(gp + 2, true); lineMult = wd[gp + 4] | (wd[gp + 5] << 8); } // sprmPDyaLine (LSPD)
             else if (sc === 0xD608) {                                      // sprmTDefTable: capture rgdxaCenter (column boundaries, twips)
-              var tcb = wd[gp + 2] | (wd[gp + 3] << 8); ol = 2 + tcb;      // 2-byte cb -- the spra=6 exception sprmOperandLen doesn't know
+              var tcb = wd[gp + 2] | (wd[gp + 3] << 8); ol = 1 + tcb;      // 2-byte cb exception; operand bytes = cb + 1 (Word writes cb = dataLen + 1)
               var itc = wd[gp + 4];                                        // itcMac (number of columns)
-              if (itc > 0 && itc < 64 && gp + 5 + (itc + 1) * 2 <= pageOff + 512) { tblw = []; for (var tt = 0; tt <= itc; tt++) tblw.push(dv.getInt16(gp + 5 + tt * 2, true)); }
+              if (itc > 0 && itc < 64 && gp + 5 + (itc + 1) * 2 <= pageOff + 512) {
+                tblw = []; for (var tt = 0; tt <= itc; tt++) tblw.push(dv.getInt16(gp + 5 + tt * 2, true));
+                // rgTc80 follows rgdxaCenter; each TC80 is 20 bytes and opens with tcgrf (cell-merge flags)
+                var tcB = gp + 5 + (itc + 1) * 2, anyM = false, mg = [];
+                for (var mc = 0; mc < itc; mc++) {
+                  var off = tcB + mc * 20, gf = (off + 1 < pageOff + 512) ? (wd[off] | (wd[off + 1] << 8)) : 0;
+                  var hm = (gf & 0x0001) ? 'start' : (gf & 0x0002) ? 'cont' : null;  // fFirstMerged / fMerged
+                  var vm = (gf & 0x0040) ? 'restart' : (gf & 0x0020) ? 'cont' : null; // fVertRestart / fVertMerge
+                  if (hm || vm) anyM = true;
+                  mg.push((hm || vm) ? { h: hm, v: vm } : null);
+                }
+                if (anyM) tblMerge = mg;
+              }
+            }
+            else if (sc === 0xD612) {                                      // sprmTDefTableShd: per-cell background (Shd, 10 bytes each)
+              var scb = wd[gp + 2], sn = Math.floor(scb / 10);             // 1-byte cb; cvFore is the fill (R,G,B,fAuto)
+              if (sn > 0 && sn < 64 && gp + 3 + sn * 10 <= pageOff + 512) { tblShd = []; for (var sj = 0; sj < sn; sj++) { var so = gp + 3 + sj * 10; tblShd.push(wd[so + 3] === 0 ? (wd[so] | (wd[so + 1] << 8) | (wd[so + 2] << 16)) : null); } }
             }
             gp += 2 + ol; if (ol <= 0) break;
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk, tblShd: tblShd, tblMerge: tblMerge });
     }
   }
 
@@ -1072,7 +1090,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0, lastCellFc = null;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
@@ -1090,10 +1108,10 @@
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
     function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
-    function endPara(kind, fc, tblw) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; paras.push(par); runs = []; curKey = null; curProps = null; }
+    function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
     // The row's column boundaries (rgdxaCenter) live in the PAPX of the row-terminator
     // mark (the last 0x07 seen), so resolve them there and attach to the rowEnd cell.
-    function flushCells() { if (!cells) return; var k = cells === 1 ? 'cell' : 'rowEnd'; var tw = (k === 'rowEnd' && paraTblw && lastCellFc != null) ? paraTblw(lastCellFc) : null; endPara(k, null, tw); cells = 0; }
+    function flushCells() { if (!cells) return; var k = cells === 1 ? 'cell' : 'rowEnd'; var rE = k === 'rowEnd' && lastCellFc != null; var tw = (rE && paraTblw) ? paraTblw(lastCellFc) : null, ts = (rE && paraTblShd) ? paraTblShd(lastCellFc) : null, tm = (rE && paraTblMerge) ? paraTblMerge(lastCellFc) : null; endPara(k, null, tw, ts, tm); cells = 0; }
     function feed(code, fc, cp) {
       // A footnote reference (0x02) whose CP is listed in PlcffndRef: record an
       // anchor run so the writer can re-place it and re-link the footnote text.
