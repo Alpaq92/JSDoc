@@ -22,6 +22,10 @@ textToDoc(input)          // → Uint8Array — write a .doc back (string or a s
 
 **▶ Live demo: <https://alpaq92.github.io/JSDoc/>**
 
+![The JSDoc demo's Formatted view rendering the bundled detailed-sample.doc — its author property, a styled bullet heading, an underlined Lorem Ipsum passage, and a two-column GPL/LGPL comparison table with hyperlinked headers.](docs/demo.png)
+
+*The Formatted view renders a `.doc` straight from the same paragraph model the writer round-trips — document properties, character styling, hyperlinks, lists, and tables.*
+
 [`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and it's parsed locally — nothing is uploaded. Three views — **Formatted** (styling, tables — including merged and shaded cells — lists, footnotes/headers, and inline images, rendered from the same paragraph model the writer uses), **Plain text**, and **Edit** (editable in place) — plus **Download** as `.txt`, `.html`, or a real `.doc`.
 
 - **Locally:** serve the folder (`npx serve`, or `python -m http.server`) and open `index.html`.
