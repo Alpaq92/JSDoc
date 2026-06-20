@@ -185,6 +185,43 @@ check('detailed-sample column widths survive round-trip (unequal preserved)',
   JSON.stringify(twRe[0].tblw) === JSON.stringify(twOrig[0].tblw) &&
   JSON.stringify(twOrig[0].tblw) !== JSON.stringify([0, 3000, 6000, 9000]));
 
+// 13b) Table cell shading + merging. Shading is a per-cell background COLORREF
+// (sprmTDefTableShd, 0xD612); merging is Word's native form — a row with fewer,
+// wider cells (a one-cell row spans the whole table).
+var shRow = docToText.model(textToDoc([
+  { runs: [{ text: 'r' }], kind: 'cell', shd: 0x0000FF },   // red   (COLORREF 0x00BBGGRR)
+  { runs: [{ text: 'y' }], kind: 'cell', shd: 0x00FFFF },   // yellow
+  { runs: [{ text: 'p' }], kind: 'rowEnd', tblw: [0, 3000, 6000, 9000] }
+])).body.filter(function (p) { return p.kind === 'rowEnd'; })[0];
+check('cell shading round-trips (sprmTDefTableShd COLORREF)',
+  !!shRow && JSON.stringify(shRow.tblShd) === JSON.stringify([0x0000FF, 0x00FFFF, null]));
+// Merge flags (fFirstMerged / fMerged in each TC80's tcgrf) round-trip as tblMerge.
+var mgRow = docToText.model(textToDoc([
+  { runs: [{ text: 'A' }], kind: 'cell', hmerge: 'start' },
+  { runs: [{ text: 'B' }], kind: 'cell', hmerge: 'cont' },
+  { runs: [{ text: 'C' }], kind: 'rowEnd', tblw: [0, 3000, 6000, 9000] }
+])).body.filter(function (p) { return p.kind === 'rowEnd'; })[0];
+check('cell merge flags round-trip (TC80 tcgrf -> tblMerge)',
+  !!mgRow && Array.isArray(mgRow.tblMerge) && !!mgRow.tblMerge[0] && mgRow.tblMerge[0].h === 'start' && mgRow.tblMerge[1].h === 'cont');
+// The generated showcase sample: a one-cell merged header (its rgdxaCenter spans the
+// table) plus shaded status cells, all surviving a read-back.
+var mshRows = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'table-merge-shade.doc')))
+  .body.filter(function (p) { return p.kind === 'rowEnd'; });
+check('sample: merged header is a one-cell, full-width row',
+  mshRows.filter(function (r) { return JSON.stringify(r.tblw) === '[0,9000]'; }).length === 1);
+check('sample: status cells carry shading (green/red/yellow)',
+  mshRows.filter(function (r) { return r.tblShd && r.tblShd.some(function (c) { return c != null; }); }).length >= 3);
+// A REAL Word-saved table (not our writer): its "Merge Cells" header reads back as one
+// full-width cell, and its shaded cell's fill is read from sprmTDefTableShd. Proves the
+// reader handles genuine Word output — in particular the 2-byte sprmTDefTable cb, whose
+// length must be right to reach the shading sprm that follows the table definition.
+var wtRows = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'word-shaded-table.doc')))
+  .body.filter(function (p) { return p.kind === 'rowEnd'; });
+check('real Word table: merged header reads as one full-width cell',
+  wtRows.some(function (r) { return JSON.stringify(r.tblw) === '[0,9000]'; }));
+check('real Word table: shaded cell fill reads from sprmTDefTableShd (red)',
+  wtRows.some(function (r) { return r.tblShd && r.tblShd.indexOf(0x0000FF) !== -1; }));
+
 // 14) Palette colours: a run coloured via the 16-colour palette (sprmCIco) rather
 // than an explicit RGB (sprmCCv) still reads back as that colour, in the model and
 // the styled HTML. The writer emits sprmCCv, so build a coloured run then

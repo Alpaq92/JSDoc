@@ -305,22 +305,38 @@
       var p = paras[i];
       if (p.kind === "cell" || p.kind === "rowEnd") {
         closeList();
-        // Proportional column widths from the first row's rgdxaCenter (rowEnd.tblw).
-        var cg = "";
-        for (var ti = i; ti < paras.length && (paras[ti].kind === "cell" || paras[ti].kind === "rowEnd"); ti++) {
-          var bnd = paras[ti].tblw;
-          if (paras[ti].kind === "rowEnd" && bnd && bnd.length > 1) {
-            var span = bnd[bnd.length - 1] - bnd[0];
-            if (span > 0) { cg = "<colgroup>"; for (var ci = 0; ci < bnd.length - 1; ci++) cg += '<col style="width:' + ((bnd[ci + 1] - bnd[ci]) / span * 100).toFixed(2) + '%">'; cg += "</colgroup>"; }
-            break;
-          }
-        }
-        html += '<table class="doc-table' + (cg ? " sized" : "") + '">' + cg + '<tbody><tr>';
+        // Gather the table's rows (cells grouped by their rowEnd), each carrying its
+        // column boundaries (rgdxaCenter) and per-cell shading.
+        var rows = [], cur = [];
         while (i < paras.length && (paras[i].kind === "cell" || paras[i].kind === "rowEnd")) {
-          html += "<td>" + runsHtml(paras[i].runs) + "</td>";
-          var end = paras[i].kind === "rowEnd"; i++;
-          if (end) { html += "</tr>"; if (i < paras.length && (paras[i].kind === "cell" || paras[i].kind === "rowEnd")) html += "<tr>"; }
+          cur.push(paras[i]);
+          if (paras[i].kind === "rowEnd") { rows.push({ cells: cur, tblw: paras[i].tblw, shd: paras[i].tblShd }); cur = []; }
+          i++;
         }
+        if (cur.length) rows.push({ cells: cur, tblw: null, shd: null });
+        // Master column grid = the sorted union of every row's boundaries, so a merged
+        // row (fewer, wider cells) lines up with the full-width rows around it.
+        var gridObj = {};
+        rows.forEach(function (rw) { if (rw.tblw) rw.tblw.forEach(function (b) { gridObj[b] = 1; }); });
+        var grid = Object.keys(gridObj).map(Number).sort(function (a, b) { return a - b; });
+        var sized = grid.length > 2, cg = "";
+        if (sized) { var tot = grid[grid.length - 1] - grid[0]; if (tot > 0) { cg = "<colgroup>"; for (var gi = 0; gi < grid.length - 1; gi++) cg += '<col style="width:' + ((grid[gi + 1] - grid[gi]) / tot * 100).toFixed(2) + '%">'; cg += "</colgroup>"; } }
+        html += '<table class="doc-table' + (sized ? " sized" : "") + '">' + cg + "<tbody>";
+        rows.forEach(function (rw) {
+          html += "<tr>";
+          for (var ci = 0; ci < rw.cells.length; ci++) {
+            var cs = 1;          // colspan: how many grid columns this cell covers
+            if (rw.tblw && rw.tblw.length === rw.cells.length + 1 && grid.length > 2) {
+              var lo = rw.tblw[ci], hi = rw.tblw[ci + 1], n = 0;
+              for (var gk = 0; gk < grid.length; gk++) if (grid[gk] > lo && grid[gk] < hi) n++;
+              cs = n + 1;
+            }
+            var shc = (rw.shd && rw.shd[ci] != null) ? rw.shd[ci] : null;
+            var bg = (shc != null) ? "rgb(" + (shc & 0xFF) + "," + ((shc >> 8) & 0xFF) + "," + ((shc >> 16) & 0xFF) + ")" : "";
+            html += "<td" + (cs > 1 ? ' colspan="' + cs + '"' : "") + (bg ? ' style="background:' + bg + '"' : "") + ">" + (runsHtml(rw.cells[ci].runs) || "&nbsp;") + "</td>";
+          }
+          html += "</tr>";
+        });
         html += "</tbody></table>";
       } else {
         var alignCss = p.align ? "text-align:" + ALIGN[p.align] + ";" : "";

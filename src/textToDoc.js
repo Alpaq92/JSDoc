@@ -239,19 +239,61 @@
     return u;
   }
   // sprmTDefTable (0xD608) operand: itcMac, then rgdxaCenter (ncols+1 signed
-  // twips) and rgTc80 (one 20-byte cell descriptor each — zero-filled =
-  // borderless). spra=6 => 2-byte length prefix. Uses the source row's preserved
-  // column boundaries when supplied, else equal columns across the text width.
-  function tDefTableSprm(ncols, bounds) {
+  // twips) and rgTc80 (one 20-byte cell descriptor each). spra=6 => 2-byte length
+  // prefix. Uses the source row's preserved column boundaries when supplied, else
+  // equal columns. Each TC80's tcgrf carries the cell-merge flags from cells[i]:
+  // horizontal (fFirstMerged 0x0001 / fMerged 0x0002) and vertical (fVertRestart
+  // 0x0040 / fVertMerge 0x0020).
+  function tDefTableSprm(ncols, bounds, cells) {
     var useB = bounds && bounds.length === ncols + 1;
     var width = 9000, op = [ncols & 0xFF];
     for (var i = 0; i <= ncols; i++) { var x = (useB ? bounds[i] : Math.round(i * width / ncols)) & 0xFFFF; op.push(x & 0xFF, (x >> 8) & 0xFF); }
     var brc = [6, 1, 0, 0];                 // Brc80: 3/4pt single line, auto colour, on all 4 sides
     for (i = 0; i < ncols; i++) {
-      op.push(0, 0, 0, 0);                  // TC80: tcgrf=0, wWidth=0 (auto)
+      var c = (cells && cells[i]) || {}, tcgrf = 0;
+      if (c.hmerge === 'start') tcgrf |= 0x0001; else if (c.hmerge === 'cont') tcgrf |= 0x0002;
+      if (c.vmerge === 'restart') tcgrf |= 0x0040; else if (c.vmerge === 'cont') tcgrf |= 0x0020;
+      op.push(tcgrf & 0xFF, (tcgrf >> 8) & 0xFF, 0, 0);          // TC80: tcgrf (merge flags) + wWidth=0
       for (var s = 0; s < 4; s++) op.push(brc[0], brc[1], brc[2], brc[3]); // brcTop/Left/Bottom/Right
     }
-    return [0x08, 0xD6, op.length & 0xFF, (op.length >> 8) & 0xFF].concat(op);
+    var cb = op.length + 1;   // sprmTDefTable's 2-byte cb counts dataLen + 1 (matches what Word writes)
+    return [0x08, 0xD6, cb & 0xFF, (cb >> 8) & 0xFF].concat(op);
+  }
+  // 16-colour palette as COLORREFs (0x00BBGGRR), for the legacy Shd80's ico fields.
+  var WR_ICO = [0, 0, 0xFF0000, 0xFFFF00, 0x00FF00, 0xFF00FF, 0x0000FF, 0x00FFFF, 0xFFFFFF, 0x800000, 0x808000, 0x008000, 0x800080, 0x000080, 0x008080, 0x808080, 0xC0C0C0];
+  function icoOf(cref) {                  // nearest palette index for a COLORREF fill
+    var r = cref & 0xFF, g = (cref >> 8) & 0xFF, b = (cref >> 16) & 0xFF, best = 1, bd = 1e9;
+    for (var i = 1; i < WR_ICO.length; i++) { var v = WR_ICO[i], dr = (v & 0xFF) - r, dg = ((v >> 8) & 0xFF) - g, db = ((v >> 16) & 0xFF) - b, d = dr * dr + dg * dg + db * db; if (d < bd) { bd = d; best = i; } }
+    return best;
+  }
+  // Per-cell background shading, matched to what Word writes (read out of a Word-saved
+  // reference). Word emits BOTH the legacy sprmTDefTableShd80 (0xD609: one 2-byte Shd80
+  // per cell — ipat<<10 | icoBack<<5 | icoFore) AND sprmTDefTableShd (0xD612: one 10-byte
+  // Shd per cell — cvFore = fill colour, cvBack = 0, ipat = 0x0034), neither with a count
+  // prefix. Editors keyed to 80-style tables read the Shd80. An unshaded cell is auto.
+  // cell.shd is a COLORREF (0x00BBGGRR). Returns [] when nothing is shaded.
+  function tblShdSprm(cells) {
+    if (!cells || !cells.some(function (c) { return c && c.shd != null; })) return [];
+    var op80 = [], op = [], op70 = [];
+    for (var i = 0; i < cells.length; i++) {
+      var c = cells[i] || {};
+      if (c.shd != null) {
+        var bg = c.shd & 0xFFFFFF, s80 = (0x34 << 10) | (1 << 5) | (icoOf(bg) & 0x1F);
+        op80.push(s80 & 0xFF, (s80 >> 8) & 0xFF);
+        var shd = [bg & 0xFF, (bg >> 8) & 0xFF, (bg >> 16) & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x34, 0x00];
+        op.push.apply(op, shd); op70.push.apply(op70, shd);
+      } else {
+        op80.push(0x00, 0x00);
+        op.push(0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00);
+        op70.push(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
+      }
+    }
+    // 0xD609 (Shd80) / 0xD612 (Shd) / 0xD670 (sprmTCellShd) each take a 1-byte cb (the
+    // ordinary spra=6 rule) -- unlike sprmTDefTable (0xD608), the 2-byte-cb exception.
+    // Word writes all three; 0xD670 is the one TextMaker reads. (Caps a row at ~25 cells.)
+    return [0x09, 0xD6, op80.length & 0xFF].concat(op80)
+      .concat([0x12, 0xD6, op.length & 0xFF]).concat(op)
+      .concat([0x70, 0xD6, op70.length & 0xFF]).concat(op70);
   }
   var SPRM_FINTABLE = [0x16, 0x24, 0x01];  // sprmPFInTable = 1
   var SPRM_FTTP = [0x17, 0x24, 0x01];      // sprmPFTtp = 1 (table terminator paragraph)
@@ -307,6 +349,9 @@
     var li = p.list, ilfo = li ? (li.kind === 'number' ? 1 : 2) : (p.ilfo || 0), ilvl = li ? (li.ilvl || 0) : (p.ilvl || 0);
     var m = { runs: (p.runs || []).map(normRun), kind: p.kind || 'p', align: p.align || 0, ilfo: ilfo, ilvl: ilvl, pp: p.pp || null };
     if (p.tblw) m.tblw = p.tblw;   // preserved table column boundaries (rgdxaCenter) on a rowEnd
+    if (p.hmerge) m.hmerge = p.hmerge;   // 'start' | 'cont' — horizontal cell merge
+    if (p.vmerge) m.vmerge = p.vmerge;   // 'restart' | 'cont' — vertical cell merge
+    if (p.shd != null) m.shd = p.shd;    // cell background (COLORREF)
     return m;
   }
   // Non-body stories from a model object (the footnotes array, etc.), mapped.
@@ -393,7 +438,7 @@
     // terminator paragraph carrying the column definition.
     var PNORMAL = papxInFkp([]);
     var PCELL = papxInFkp(SPRM_FINTABLE);
-    function papxTtp(ncols, bounds) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols, bounds))); }
+    function papxTtp(ncols, bounds, cells) { return papxInFkp(SPRM_FINTABLE.concat(SPRM_FTTP, tDefTableSprm(ncols, bounds, cells), tblShdSprm(cells))); }
     // Normal paragraph PAPX with optional list membership (sprmPIlvl 0x260A +
     // sprmPIlfo 0x460B, referencing the skeleton's list tables) and alignment
     // (sprmPJc80 0x2403: 0 left / 1 centre / 2 right / 3 justify).
@@ -498,16 +543,17 @@
       var blob = new Uint8Array(g.length + 1); blob[0] = g.length; blob.set(g, 1);
       chpxRuns.push({ s: codes.length - 1, e: codes.length, blob: blob });
     }
-    var cellsInRow = 0;
+    var cellsInRow = 0, rowCells = [];
+    function cellInfo(p) { return { hmerge: p.hmerge, vmerge: p.vmerge, shd: p.shd }; }
     for (var pi = 0; pi < paras.length; pi++) {
       var par = paras[pi];
       for (var ri = 0; ri < par.runs.length; ri++) { var run = par.runs[ri]; if (run.image) emitImage(run.image); else emitRun(run); }
-      if (par.kind === 'cell') { emitMark(0x07); endPara(PCELL); cellsInRow++; }
+      if (par.kind === 'cell') { emitMark(0x07); endPara(PCELL); cellsInRow++; rowCells.push(cellInfo(par)); }
       else if (par.kind === 'rowEnd') {
-        emitMark(0x07); endPara(PCELL); cellsInRow++;       // final cell of the row
-        emitMark(0x07); endPara(papxTtp(cellsInRow, par.tblw));  // empty row-terminator paragraph (preserves column widths)
-        cellsInRow = 0;
-      } else { emitMark(0x0D); endPara(papxForP(par)); cellsInRow = 0; }  // normal paragraph (alignment + list)
+        emitMark(0x07); endPara(PCELL); cellsInRow++; rowCells.push(cellInfo(par));   // final cell of the row
+        emitMark(0x07); endPara(papxTtp(cellsInRow, par.tblw, rowCells));  // row terminator: widths + merge flags + shading
+        cellsInRow = 0; rowCells = [];
+      } else { emitMark(0x0D); endPara(papxForP(par)); cellsInRow = 0; rowCells = []; }  // normal paragraph (alignment + list)
     }
     if (!codes.length || codes[codes.length - 1] !== 0x0D) { emitMark(0x0D); endPara(PNORMAL); }
     var ccpText = codes.length;   // body ends here; non-body stories follow in CP space
