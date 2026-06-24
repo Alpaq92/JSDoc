@@ -346,6 +346,22 @@ check('paragraph border sides round-trip (colour + width, only set sides)',
 check('a plain paragraph carries no shd / borders',
   (function () { var pp = docToText.model(textToDoc('plain')).body[0].pp || {}; return pp.shd === undefined && pp.borders === undefined; })());
 
+// 14b) Character formatting completeness: underline styles (sprmCKul kind -> uStyle),
+// small caps (sprmCFSmallCaps) and all caps (sprmCFCaps). The toggle path matches
+// bold/italic; the caps opcodes are confirmed present 300x across the fixture corpus.
+var chrRuns = docToText.model(textToDoc([{ runs: [
+  { text: 'dbl', u: true, uStyle: 'double' }, { text: ' dot', u: true, uStyle: 'dotted' },
+  { text: ' wav', u: true, uStyle: 'wavy' }, { text: ' plain', u: true },
+  { text: ' sc', smallCaps: true }, { text: ' ac', caps: true }
+], kind: 'p' }])).body[0].runs;
+function cget(txt) { for (var ci = 0; ci < chrRuns.length; ci++) if (chrRuns[ci].text.trim() === txt) return chrRuns[ci]; return null; }
+check('underline styles round-trip (double / dotted / wavy)',
+  !!cget('dbl') && cget('dbl').uStyle === 'double' && cget('dot').uStyle === 'dotted' && cget('wav').uStyle === 'wavy');
+check('a plain single underline carries no uStyle', !!cget('plain') && cget('plain').u === true && cget('plain').uStyle == null);
+check('small caps and all caps round-trip', !!cget('sc') && cget('sc').smallCaps === true && !!cget('ac') && cget('ac').caps === true);
+check('styled HTML renders underline style + caps',
+  (function () { var h = docToText.html(textToDoc([{ runs: [{ text: 'x', u: true, uStyle: 'double' }, { text: 'y', caps: true }], kind: 'p' }])).body; return /text-decoration-style:double/.test(h) && /text-transform:uppercase/.test(h); })());
+
 // 17) Floating-shape positions: the reader exposes each text box's FSPA bounding box
 // (page coordinates, twips) as model.shapes, so the demo can place it where the
 // document actually puts it rather than at its text anchor.

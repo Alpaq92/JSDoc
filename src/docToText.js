@@ -590,8 +590,10 @@
         case 0x0835: p.b = (wd[q] & 1) === 1; break;          // bold
         case 0x0836: p.i = (wd[q] & 1) === 1; break;          // italic
         case 0x0837: p.strike = (wd[q] & 1) === 1; break;     // strikethrough
+        case 0x083A: p.smallCaps = (wd[q] & 1) === 1; break;  // sprmCFSmallCaps
+        case 0x083B: p.caps = (wd[q] & 1) === 1; break;       // sprmCFCaps (all caps)
         case 0x083C: p.hidden = (wd[q] & 1) === 1; break;     // vanish (hidden text)
-        case 0x2A3E: p.u = wd[q]; break;                       // underline kind (0 = none)
+        case 0x2A3E: p.u = wd[q]; break;                       // underline kind (0 = none, 1 = single, 3 = double, ...)
         case 0x2A48: p.iss = wd[q]; break;                     // sprmCSs: 0 none, 1 superscript, 2 subscript
         case 0x2A0C: p.highlightIco = wd[q]; break;            // sprmCHighlight: 16-colour palette index (0 = none)
         case 0x4A43: p.hps = wd[q] | (wd[q + 1] << 8); break;  // font size, half-points
@@ -1082,6 +1084,8 @@
   // one. Indices 0/1 (auto/black) stay 0 = "default text colour, don't store".
   var ICO_CV = [0, 0, 0xFF0000, 0xFFFF00, 0x00FF00, 0xFF00FF, 0x0000FF, 0x00FFFF,
     0xFFFFFF, 0x800000, 0x808000, 0x008000, 0x800080, 0x000080, 0x008080, 0x808080, 0xC0C0C0];
+  // sprmCKul (underline) kind -> CSS text-decoration-style, for non-plain underlines.
+  var UL_STYLE = { 3: 'double', 4: 'dotted', 7: 'dashed', 9: 'dashed', 10: 'dashed', 11: 'wavy', 20: 'wavy', 23: 'dashed' };
 
   function escHtml(s) {
     return s.replace(/[&<>]/g, function (c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'; });
@@ -1097,6 +1101,9 @@
     if (p.u) deco += 'underline ';
     if (p.strike) deco += 'line-through ';
     if (deco) css += 'text-decoration:' + deco.trim() + ';';
+    if (p.u && UL_STYLE[p.u]) css += 'text-decoration-style:' + UL_STYLE[p.u] + ';';  // double / dotted / dashed / wavy
+    if (p.smallCaps) css += 'font-variant:small-caps;';
+    if (p.caps) css += 'text-transform:uppercase;';
     var sup = p.iss === 1, sub = p.iss === 2;                                 // super/subscript: raise/lower and shrink
     if (sup) css += 'vertical-align:super;';
     else if (sub) css += 'vertical-align:sub;';
@@ -1181,15 +1188,15 @@
   function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, paraIsTtp, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], lastCellPara = null;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
-    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null };
+    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false };
     function props(p) {
       var color = null;
       if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) color = p.cv & 0xFFFFFF; // already 0x00BBGGRR
       var va = p.iss === 1 ? 'super' : p.iss === 2 ? 'sub' : null;          // sprmCSs
       var hl = (p.highlightIco > 1 && p.highlightIco <= 16 && ICO_CV[p.highlightIco]) ? ICO_CV[p.highlightIco] : null; // sprmCHighlight -> COLORREF
-      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl };
+      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl, uStyle: (p.u && UL_STYLE[p.u]) || null, smallCaps: !!p.smallCaps, caps: !!p.caps };
     }
-    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight; }
+    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight + '|' + pp.uStyle + '|' + pp.smallCaps + '|' + pp.caps; }
     // A HYPERLINK field instruction is `HYPERLINK "addr" [switches]`; the address
     // is the first quoted token (or first bare token for an unquoted URL).
     function parseHyperlink(s) {
@@ -1197,7 +1204,7 @@
       var q = /"([^"]+)"/.exec(m[1]); if (q) return q[1];
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
-    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
+    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curProps.uStyle) r.uStyle = curProps.uStyle; if (curProps.smallCaps) r.smallCaps = true; if (curProps.caps) r.caps = true; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
     function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
     // Each cell mark (0x07) closes one cell; the row's terminator mark (sprmPFTtp)
     // promotes that row's last cell to the rowEnd and attaches the column boundaries /
