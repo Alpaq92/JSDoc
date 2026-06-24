@@ -284,6 +284,23 @@ check('keep-with-next round-trips (sprmPFKeepFollow)', !!kb[0].pp && kb[0].pp.ke
 check('keep-together + page-break-before round-trip', !!kb[1].pp && kb[1].pp.keepLines === 1 && kb[1].pp.pageBreak === 1);
 check('a plain paragraph carries no keep/break flags', kb[2].pp == null);
 
+// 16b) Tab stops: custom paragraph tab stops (sprmPChgTabsPapx -> PChgTabsPapxOperand)
+// round-trip — position (twips), alignment (jc) and leader (tlc, from each TBD byte).
+// Structure verified against the [MS-DOC] spec; no local fixture uses explicit tab stops
+// (default tab stops aren't stored per paragraph), so this is round-trip + spec coverage.
+var tabPP = docToText.model(textToDoc([{ runs: [{ text: 'A\tB\tC' }], kind: 'p', pp: { tabs: [
+  { pos: 1440, align: 'left', leader: 'none' },
+  { pos: 5040, align: 'decimal', leader: 'dot' },
+  { pos: 8640, align: 'right', leader: 'underscore' }
+] } }])).body[0].pp;
+check('tab stops round-trip (pos / alignment / leader)',
+  !!tabPP && Array.isArray(tabPP.tabs) && tabPP.tabs.length === 3 &&
+  tabPP.tabs[0].pos === 1440 && tabPP.tabs[0].align === 'left' && tabPP.tabs[0].leader === 'none' &&
+  tabPP.tabs[1].pos === 5040 && tabPP.tabs[1].align === 'decimal' && tabPP.tabs[1].leader === 'dot' &&
+  tabPP.tabs[2].pos === 8640 && tabPP.tabs[2].align === 'right' && tabPP.tabs[2].leader === 'underscore');
+check('a paragraph with no tab stops carries no pp.tabs',
+  (docToText.model(textToDoc('plain')).body[0].pp || {}).tabs === undefined);
+
 // 17) Floating-shape positions: the reader exposes each text box's FSPA bounding box
 // (page coordinates, twips) as model.shapes, so the demo can place it where the
 // document actually puts it rather than at its text anchor.

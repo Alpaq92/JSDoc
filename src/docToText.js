@@ -421,6 +421,7 @@
       if (r.keepN) pp.keepNext = 1;       // keep with next paragraph
       if (r.keepL) pp.keepLines = 1;      // keep lines together
       if (r.pgBrk) pp.pageBreak = 1;      // page break before
+      if (r.tabs) pp.tabs = r.tabs;       // tab stops [{ pos (twips), align, leader }]
       return Object.keys(pp).length ? pp : null;
     }
     // The table row's column boundaries (rgdxaCenter twips), from sprmTDefTable on
@@ -737,6 +738,9 @@
     } catch (e) { return null; }
   }
 
+  // Tab descriptor (TBD) fields: jc (alignment, bits 0-2) and tlc (leader, bits 3-5).
+  var TAB_JC = ['left', 'center', 'right', 'decimal', 'bar'];
+  var TAB_TLC = ['none', 'dot', 'hyphen', 'underscore', 'heavy', 'middot'];
   // One PapxFkp page: crun at byte 511, rgfc[crun+1], then rgbx[crun] (BxPap,
   // 13 bytes each; first byte is the word offset to a PapxInFkp, 0 = default).
   function collectPapxFkp(wd, pageOff, runs) {
@@ -750,7 +754,7 @@
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
       var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
-      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0, tblShd = null, tblMerge = null, ttp = 0;
+      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0, tblShd = null, tblMerge = null, ttp = 0, tabs = null;
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
@@ -769,6 +773,23 @@
             else if (sc === 0x2406) keepN = wd[gp + 2];                    // sprmPFKeepFollow (keep with next)
             else if (sc === 0x2407) pgBrk = wd[gp + 2];                    // sprmPFPageBreakBefore
             else if (sc === 0x2417) ttp = wd[gp + 2];                      // sprmPFTtp (table-terminating paragraph = row mark)
+            else if (sc === 0xC60D || sc === 0xC615) {                     // sprmPChgTabsPapx / sprmPChgTabs: custom tab stops
+              var tcb = wd[gp + 2], end2 = gp + 3 + tcb, p2 = gp + 3;      // operand: cb, then PChgTabsDel[Close], then PChgTabsAdd
+              if (tcb !== 255 && p2 < end2 && end2 <= pageOff + 512) {     // cb == 255 is an "ignore" sentinel
+                var cDel = wd[p2]; p2 += 1 + cDel * (sc === 0xC615 ? 4 : 2); // 0xC615's PChgTabsDelClose carries rgdxaClose too (4 bytes/entry)
+                if (p2 < end2) {
+                  var cAdd = wd[p2]; p2 += 1;                              // PChgTabsAdd: cTabs, then rgdxaAdd (XAS), then rgtbdAdd (TBD)
+                  var posB = p2, tbdB = p2 + cAdd * 2;
+                  if (cAdd > 0 && cAdd <= 64 && tbdB + cAdd <= end2) {
+                    tabs = [];
+                    for (var ta = 0; ta < cAdd; ta++) {
+                      var tbd = wd[tbdB + ta];                             // TBD: jc (bits 0-2), tlc (bits 3-5)
+                      tabs.push({ pos: dv.getInt16(posB + ta * 2, true), align: TAB_JC[tbd & 0x07] || 'left', leader: TAB_TLC[(tbd >> 3) & 0x07] || 'none' });
+                    }
+                  }
+                }
+              }
+            }
             else if (sc === 0x840F) indL = dv.getInt16(gp + 2, true);      // sprmPDxaLeft
             else if (sc === 0x840E) indR = dv.getInt16(gp + 2, true);      // sprmPDxaRight
             else if (sc === 0x8411) ind1 = dv.getInt16(gp + 2, true);      // sprmPDxaLeft1 (first line; <0 = hanging)
@@ -800,7 +821,7 @@
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk, tblShd: tblShd, tblMerge: tblMerge, ttp: ttp });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk, tblShd: tblShd, tblMerge: tblMerge, ttp: ttp, tabs: tabs });
     }
   }
 
