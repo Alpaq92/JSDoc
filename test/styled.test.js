@@ -362,6 +362,28 @@ check('small caps and all caps round-trip', !!cget('sc') && cget('sc').smallCaps
 check('styled HTML renders underline style + caps',
   (function () { var h = docToText.html(textToDoc([{ runs: [{ text: 'x', u: true, uStyle: 'double' }, { text: 'y', caps: true }], kind: 'p' }])).body; return /text-decoration-style:double/.test(h) && /text-transform:uppercase/.test(h); })());
 
+// 14c) Hidden text (sprmCFVanish) round-trips as run.hidden (dimmed in the demo, but
+// kept in the extracted text — it's content, not chrome).
+var hidRun = docToText.model(textToDoc([{ runs: [{ text: 'a' }, { text: 'b', hidden: true }], kind: 'p' }])).body[0].runs;
+check('hidden text round-trips (sprmCFVanish -> run.hidden)', hidRun.length === 2 && !hidRun[0].hidden && hidRun[1].hidden === true);
+check('hidden text stays in the plain-text output', docToText(textToDoc([{ runs: [{ text: 'keep', hidden: true }], kind: 'p' }])).indexOf('keep') === 0);
+
+// 14d) Plain-text tables keep empty cells as empty columns — the row terminator is found
+// by its sprmPFTtp mark, not by counting cell marks, so "A | (empty) | C" is "A\t\tC"
+// (an empty middle column) instead of being split across two lines.
+check('plain-text empty cell stays an empty column (not a split row)',
+  docToText(textToDoc([{ runs: [{ text: 'A' }], kind: 'cell' }, { runs: [], kind: 'cell' }, { runs: [{ text: 'C' }], kind: 'rowEnd', tblw: [0, 3000, 6000, 9000] }])).indexOf('A\t\tC') === 0);
+
+// 14e) Vertical cell merge (TC80 fVertRestart / fVertMerge) round-trips as tblMerge[ci].v
+// ('restart' / 'cont'), which the demo renders as a rowspan.
+var vmRows = docToText.model(textToDoc([
+  { runs: [{ text: 'M' }], kind: 'cell', vmerge: 'restart' }, { runs: [{ text: 'b1' }], kind: 'rowEnd', tblw: [0, 4500, 9000] },
+  { runs: [], kind: 'cell', vmerge: 'cont' }, { runs: [{ text: 'b2' }], kind: 'rowEnd', tblw: [0, 4500, 9000] }
+])).body.filter(function (p) { return p.kind === 'rowEnd'; });
+check('vertical merge round-trips (restart / cont in tblMerge)',
+  vmRows.length === 2 && !!vmRows[0].tblMerge && !!vmRows[0].tblMerge[0] && vmRows[0].tblMerge[0].v === 'restart' &&
+  !!vmRows[1].tblMerge && !!vmRows[1].tblMerge[0] && vmRows[1].tblMerge[0].v === 'cont');
+
 // 17) Floating-shape positions: the reader exposes each text box's FSPA bounding box
 // (page coordinates, twips) as model.shapes, so the demo can place it where the
 // document actually puts it rather than at its text anchor.

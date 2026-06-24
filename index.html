@@ -291,6 +291,7 @@
     if (r.u && r.uStyle) css += "text-decoration-style:" + r.uStyle + ";";   // double / dotted / dashed / wavy
     if (r.smallCaps) css += "font-variant:small-caps;";
     if (r.caps) css += "text-transform:uppercase;";
+    if (r.hidden) css += "opacity:0.5;";   // hidden text — dimmed, not dropped
     var sup = r.va === "super", sub = r.va === "sub";   // super/subscript: raise/lower and shrink ~2/3
     if (sup) css += "vertical-align:super;";
     else if (sub) css += "vertical-align:sub;";
@@ -366,7 +367,7 @@
         var rows = [], cur = [];
         while (i < paras.length && (paras[i].kind === "cell" || paras[i].kind === "rowEnd")) {
           cur.push(paras[i]);
-          if (paras[i].kind === "rowEnd") { rows.push({ cells: cur, tblw: paras[i].tblw, shd: paras[i].tblShd }); cur = []; }
+          if (paras[i].kind === "rowEnd") { rows.push({ cells: cur, tblw: paras[i].tblw, shd: paras[i].tblShd, merge: paras[i].tblMerge }); cur = []; }
           i++;
         }
         if (cur.length) rows.push({ cells: cur, tblw: null, shd: null });
@@ -377,19 +378,33 @@
         var grid = Object.keys(gridObj).map(Number).sort(function (a, b) { return a - b; });
         var sized = grid.length > 2, cg = "";
         if (sized) { var tot = grid[grid.length - 1] - grid[0]; if (tot > 0) { cg = "<colgroup>"; for (var gi = 0; gi < grid.length - 1; gi++) cg += '<col style="width:' + ((grid[gi + 1] - grid[gi]) / tot * 100).toFixed(2) + '%">'; cg += "</colgroup>"; } }
+        // Vertical merges: a cell flagged vmerge "restart" spans down over the following
+        // rows whose same-column cell is "cont" — render it once with rowspan, skip the conts.
+        var vspan = {}, vskip = {};
+        rows.forEach(function (rw, r) {
+          if (!rw.merge) return;
+          rw.merge.forEach(function (m, ci) {
+            if (!m || m.v !== "restart") return;
+            var rs = 1;
+            for (var r2 = r + 1; r2 < rows.length; r2++) { var m2 = rows[r2].merge && rows[r2].merge[ci]; if (m2 && m2.v === "cont") { rs++; vskip[r2 + "," + ci] = 1; } else break; }
+            if (rs > 1) vspan[r + "," + ci] = rs;
+          });
+        });
         html += '<table class="doc-table' + (sized ? " sized" : "") + '">' + cg + "<tbody>";
-        rows.forEach(function (rw) {
+        rows.forEach(function (rw, r) {
           html += "<tr>";
           for (var ci = 0; ci < rw.cells.length; ci++) {
+            if (vskip[r + "," + ci]) continue;   // covered by a rowspan from a row above
             var cs = 1;          // colspan: how many grid columns this cell covers
             if (rw.tblw && rw.tblw.length === rw.cells.length + 1 && grid.length > 2) {
               var lo = rw.tblw[ci], hi = rw.tblw[ci + 1], n = 0;
               for (var gk = 0; gk < grid.length; gk++) if (grid[gk] > lo && grid[gk] < hi) n++;
               cs = n + 1;
             }
+            var rs = vspan[r + "," + ci] || 1;
             var shc = (rw.shd && rw.shd[ci] != null) ? rw.shd[ci] : null;
             var bg = (shc != null) ? "rgb(" + (shc & 0xFF) + "," + ((shc >> 8) & 0xFF) + "," + ((shc >> 16) & 0xFF) + ")" : "";
-            html += "<td" + (cs > 1 ? ' colspan="' + cs + '"' : "") + (bg ? ' style="background:' + bg + '"' : "") + ">" + (runsHtml(rw.cells[ci].runs) || "&nbsp;") + "</td>";
+            html += "<td" + (cs > 1 ? ' colspan="' + cs + '"' : "") + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (bg ? ' style="background:' + bg + '"' : "") + ">" + (runsHtml(rw.cells[ci].runs) || "&nbsp;") + "</td>";
           }
           html += "</tr>";
         });
