@@ -204,13 +204,19 @@ var mgRow = docToText.model(textToDoc([
 check('cell merge flags round-trip (TC80 tcgrf -> tblMerge)',
   !!mgRow && Array.isArray(mgRow.tblMerge) && !!mgRow.tblMerge[0] && mgRow.tblMerge[0].h === 'start' && mgRow.tblMerge[1].h === 'cont');
 // The generated showcase sample: a one-cell merged header (its rgdxaCenter spans the
-// table) plus shaded status cells, all surviving a read-back.
-var mshRows = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'table-merge-shade.doc')))
-  .body.filter(function (p) { return p.kind === 'rowEnd'; });
+// table) plus shaded status cells AND character extras (super/subscript + highlight),
+// all surviving a read-back.
+var mshModel = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'feature-showcase.doc')));
+var mshRows = mshModel.body.filter(function (p) { return p.kind === 'rowEnd'; });
 check('sample: merged header is a one-cell, full-width row',
   mshRows.filter(function (r) { return JSON.stringify(r.tblw) === '[0,9000]'; }).length === 1);
 check('sample: status cells carry shading (green/red/yellow)',
   mshRows.filter(function (r) { return r.tblShd && r.tblShd.some(function (c) { return c != null; }); }).length >= 3);
+var mshRuns = []; mshModel.body.forEach(function (p) { (p.runs || []).forEach(function (rr) { mshRuns.push(rr); }); });
+check('sample: shows superscript and subscript',
+  mshRuns.some(function (r) { return r.va === 'super'; }) && mshRuns.some(function (r) { return r.va === 'sub'; }));
+check('sample: shows highlighted runs',
+  mshRuns.filter(function (r) { return r.highlight != null; }).length >= 2);
 // A REAL Word-saved table (not our writer): its "Merge Cells" header reads back as one
 // full-width cell, and its shaded cell's fill is read from sprmTDefTableShd. Proves the
 // reader handles genuine Word output — in particular the 2-byte sprmTDefTable cb, whose
