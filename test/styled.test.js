@@ -301,6 +301,25 @@ check('tab stops round-trip (pos / alignment / leader)',
 check('a paragraph with no tab stops carries no pp.tabs',
   (docToText.model(textToDoc('plain')).body[0].pp || {}).tabs === undefined);
 
+// 16c) Bookmarks: named CP ranges (SttbfBkmk + Plcfbkf + Plcfbkl) round-trip as
+// model.bookmarks = [{ name, start, end }], including nested/overlapping ranges paired
+// via FBKF.ibkl. Layout verified against the [MS-DOC] worked example; no local fixture
+// has bookmarks, so this is round-trip + spec coverage.
+var bks = docToText.model(textToDoc({
+  body: [{ runs: [{ text: 'The quick brown fox.' }], kind: 'p' }],
+  bookmarks: [{ name: 'fox', start: 16, end: 19 }, { name: 'all', start: 0, end: 20 }, { name: 'quick', start: 4, end: 9 }]
+})).bookmarks;
+function bget(nm) { for (var bj = 0; bj < (bks || []).length; bj++) if (bks[bj].name === nm) return bks[bj]; return null; }
+check('bookmarks round-trip (name + CP range)',
+  Array.isArray(bks) && bks.length === 3 &&
+  !!bget('fox') && bget('fox').start === 16 && bget('fox').end === 19 &&
+  !!bget('quick') && bget('quick').start === 4 && bget('quick').end === 9 &&
+  !!bget('all') && bget('all').start === 0 && bget('all').end === 20);
+check('bookmarks come back sorted by start (overlap/nesting resolved via ibkl)',
+  bks[0].start <= bks[1].start && bks[1].start <= bks[2].start);
+check('a doc with no bookmarks carries no model.bookmarks',
+  docToText.model(textToDoc('plain')).bookmarks === undefined);
+
 // 17) Floating-shape positions: the reader exposes each text box's FSPA bounding box
 // (page coordinates, twips) as model.shapes, so the demo can place it where the
 // document actually puts it rather than at its text anchor.

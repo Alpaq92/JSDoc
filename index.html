@@ -87,6 +87,9 @@
   #rich.paper .docbox.placed, #rich.paper .docbox { background: #fff; border-color: #c8ccd2; }
   /* Document properties (title/author/...) as a quiet metadata bar above the body. */
   .docprops { font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 12px; }
+  ul.bookmarks { margin: 6px 0 14px; padding-left: 20px; font-size: 13.5px; }
+  ul.bookmarks li { margin: 2px 0; }
+  ul.bookmarks .bkcp { color: var(--muted); font-size: 12px; }
   table.doc-table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 13.5px; }
   table.doc-table th, table.doc-table td {
     border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top;
@@ -501,6 +504,15 @@
     function flatStory(ps) { return ps.map(function (p) { return (p.runs || []).map(function (r) { return r.text || ""; }).join(""); }).join("\n"); }
     if (model && model.header) { extras.push("Header"); plain += "\n\nHeader:\n" + flatStory(model.header); html += '<h3 class="sec">Header</h3>' + renderModel(model.header); }
     if (model && model.footer) { extras.push("Footer"); plain += "\n\nFooter:\n" + flatStory(model.footer); html += '<h3 class="sec">Footer</h3>' + renderModel(model.footer); }
+    // Bookmarks: list each named range with its CP span and a best-effort text excerpt.
+    if (model && model.bookmarks && model.bookmarks.length) {
+      extras.push("Bookmarks");
+      plain += "\n\nBookmarks:\n" + model.bookmarks.map(function (bk) { return bk.name + " [" + bk.start + "–" + bk.end + "]"; }).join("\n");
+      html += '<h3 class="sec">Bookmarks</h3><ul class="bookmarks">' + model.bookmarks.map(function (bk) {
+        var ex = doc.body.slice(bk.start, bk.end).replace(/\s+/g, " ").trim();
+        return "<li><code>" + esc(bk.name) + '</code> <span class="bkcp">CP ' + bk.start + "–" + bk.end + "</span>" + (ex ? " — “" + esc(ex.slice(0, 60)) + (ex.length > 60 ? "…" : "") + "”" : "") + "</li>";
+      }).join("") + "</ul>";
+    }
     var imgs = docToText.images(buffer) || []; // for the meta count; images render inline above
 
     lastText = plain;
