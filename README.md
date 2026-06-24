@@ -65,7 +65,7 @@ The main body text and its paragraph breaks. Smart quotes and non-Latin scripts 
 
 Not handled yet (and where each would slot in):
 
-- **Tables** come out as one row per line with tab-separated columns — close to the original grid, though merged or empty cells can nudge the columns.
+- **Tables** flatten to one row per line with tab-separated columns in the *plain-text* output — close to the original grid, though merged or empty cells can nudge those tabs. (`docToText.model()` and the demo's Formatted view keep the real cell structure — column widths, shading, merges, and empty cells.)
 - **WMF/EMF images** — only PNG/JPEG are extracted (see `docToText.images`); the common WMF/EMF *metafiles* can't be rendered in-browser without a heavy, non-permissive converter, so they're skipped. Exact inline image *placement* isn't reconstructed either — images come out as a set.
 - **Exact page layout** (line/page-break positions, columns, precise spacing) — that needs a real layout engine, not just property resolution.
 

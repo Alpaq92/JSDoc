@@ -228,6 +228,19 @@ check('real Word table: merged header reads as one full-width cell',
 check('real Word table: shaded cell fill reads from sprmTDefTableShd (red)',
   wtRows.some(function (r) { return r.tblShd && r.tblShd.indexOf(0x0000FF) !== -1; }));
 
+// 13c) Empty table cells survive. A row "A | (empty) | C" must read back as ONE row of
+// three cells (empty middle preserved), not split into two — the reader keys the row
+// terminator off sprmPFTtp instead of counting consecutive cell marks, so a blank cell's
+// back-to-back 0x07s no longer collapse or break the row.
+var ecBody = docToText.model(textToDoc([
+  { runs: [{ text: 'A' }], kind: 'cell' }, { runs: [], kind: 'cell' }, { runs: [{ text: 'C' }], kind: 'rowEnd', tblw: [0, 3000, 6000, 9000] }
+])).body;
+var ecCells = ecBody.filter(function (p) { return p.kind === 'cell' || p.kind === 'rowEnd'; });
+check('empty middle cell preserved, row not split',
+  ecBody.filter(function (p) { return p.kind === 'rowEnd'; }).length === 1 && ecCells.length === 3);
+check('empty cell is empty, neighbours intact',
+  ecCells[0].runs[0] && ecCells[0].runs[0].text === 'A' && ecCells[1].runs.length === 0 && ecCells[2].runs[0] && ecCells[2].runs[0].text === 'C');
+
 // 14) Palette colours: a run coloured via the 16-colour palette (sprmCIco) rather
 // than an explicit RGB (sprmCCv) still reads back as that colour, in the model and
 // the styled HTML. The writer emits sprmCCv, so build a coloured run then
