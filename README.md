@@ -26,7 +26,7 @@ textToDoc(input)          // → Uint8Array — write a .doc back (string or a s
 
 *The Formatted view renders a `.doc` straight from the same paragraph model the writer round-trips — document properties, character styling, hyperlinks, lists, and tables.*
 
-[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and it's parsed locally — nothing is uploaded. Three views — **Formatted** (styling, tables — including merged and shaded cells — lists, footnotes/headers, and inline images, rendered from the same paragraph model the writer uses), **Plain text**, and **Edit** (editable in place) — plus **Download** as `.txt`, `.html`, or a real `.doc`.
+[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and it's parsed locally — nothing is uploaded. Three views — **Formatted** (styling, tables — including merged and shaded cells — lists, tab stops with leaders, footnotes/headers, and inline images, rendered from the same paragraph model the writer uses), **Plain text**, and **Edit** (editable in place) — plus **Download** as `.txt`, `.html`, or a real `.doc`.
 
 - **Locally:** serve the folder (`npx serve`, or `python -m http.server`) and open `index.html`.
 - **On GitHub Pages:** Settings → Pages → deploy from `main` / root, then it's live at <https://alpaq92.github.io/JSDoc/>. The sample in [`samples/`](samples/) is bundled, so the page needs no network at all.
