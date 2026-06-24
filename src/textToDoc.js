@@ -160,7 +160,9 @@
     if (r.b) sprm(b, 0x0835, [1]);            // sprmCFBold
     if (r.i) sprm(b, 0x0836, [1]);            // sprmCFItalic
     if (r.strike) sprm(b, 0x0837, [1]);       // sprmCFStrike
-    if (r.u) sprm(b, 0x2A3E, [1]);            // sprmCKul = 1 (single underline)
+    if (r.smallCaps) sprm(b, 0x083A, [1]);    // sprmCFSmallCaps
+    if (r.caps) sprm(b, 0x083B, [1]);         // sprmCFCaps (all caps)
+    if (r.u) sprm(b, 0x2A3E, [WR_UL[r.uStyle] || 1]);  // sprmCKul (1 single, 3 double, 4 dotted, 7 dash, 11 wave)
     if (r.va === 'super') sprm(b, 0x2A48, [1]);          // sprmCSs = 1 (superscript)
     else if (r.va === 'sub') sprm(b, 0x2A48, [2]);       // sprmCSs = 2 (subscript)
     if (r.size) { var hp = Math.round(r.size * 2); sprm(b, 0x4A43, [hp, hp >> 8]); }      // sprmCHps (half-points)
@@ -262,6 +264,8 @@
     var cb = op.length + 1;   // sprmTDefTable's 2-byte cb counts dataLen + 1 (matches what Word writes)
     return [0x08, 0xD6, cb & 0xFF, (cb >> 8) & 0xFF].concat(op);
   }
+  // Underline CSS style -> sprmCKul kind, the inverse of the reader's UL_STYLE.
+  var WR_UL = { double: 3, dotted: 4, dashed: 7, wavy: 11 };
   // Tab-stop TBD field maps (model strings -> jc/tlc codes), the inverse of the reader's.
   var WR_TAB_JC = { left: 0, center: 1, right: 2, decimal: 3, bar: 4 };
   var WR_TAB_TLC = { none: 0, dot: 1, hyphen: 2, underscore: 3, heavy: 4, middot: 5 };
@@ -348,6 +352,9 @@
     var n = { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
     if (r.va === 'super' || r.va === 'sub') n.va = r.va;   // vertical alignment (super/subscript)
     if (r.highlight != null) n.highlight = r.highlight;    // highlight fill (COLORREF)
+    if (r.uStyle) n.uStyle = r.uStyle;                     // underline style (double/dotted/dashed/wavy)
+    if (r.smallCaps) n.smallCaps = true;                   // small caps
+    if (r.caps) n.caps = true;                             // all caps
     if (r.url) n.url = String(r.url);
     return n;
   }

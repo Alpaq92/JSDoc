@@ -288,6 +288,9 @@
     if (r.i) css += "font-style:italic;";
     var deco = (r.u ? "underline " : "") + (r.strike ? "line-through" : "");
     if (deco.trim()) css += "text-decoration:" + deco.trim() + ";";
+    if (r.u && r.uStyle) css += "text-decoration-style:" + r.uStyle + ";";   // double / dotted / dashed / wavy
+    if (r.smallCaps) css += "font-variant:small-caps;";
+    if (r.caps) css += "text-transform:uppercase;";
     var sup = r.va === "super", sub = r.va === "sub";   // super/subscript: raise/lower and shrink ~2/3
     if (sup) css += "vertical-align:super;";
     else if (sub) css += "vertical-align:sub;";
