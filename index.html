@@ -96,6 +96,14 @@
   /* Honour the source column widths (rgdxaCenter) when we have them. */
   table.doc-table.sized { table-layout: fixed; }
   table.doc-table.sized td { overflow-wrap: break-word; }
+  /* Tab stops: segments laid out in a row, the gap between them a leader fill. */
+  p.tabline { display: flex; align-items: baseline; flex-wrap: nowrap; max-width: 100%; }
+  p.tabline .tseg { white-space: pre; }
+  p.tabline .tfill { flex: 1 1 0; min-width: 1.5em; margin: 0 .35em; }
+  p.tabline .tfill.dot { border-bottom: 2px dotted currentColor; }
+  p.tabline .tfill.hyphen { border-bottom: 2px dashed currentColor; }
+  p.tabline .tfill.underscore { border-bottom: 1px solid currentColor; }
+  p.tabline .tfill.heavy { border-bottom: 3px solid currentColor; }
   pre#out {
     margin: 0; max-height: 460px; overflow: auto; white-space: pre-wrap;
     word-break: break-word; font-family: var(--mono); font-size: 13px;
@@ -303,6 +311,33 @@
     }
     return s;
   }
+  // Split a paragraph's runs into segments at each tab character, keeping run styling.
+  function tabSegments(runs) {
+    var segs = [[]];
+    (runs || []).forEach(function (r) {
+      if (r.text == null) { segs[segs.length - 1].push(r); return; }
+      String(r.text).split("\t").forEach(function (txt, j) {
+        if (j > 0) segs.push([]);
+        if (txt) { var piece = {}; for (var k in r) piece[k] = r[k]; piece.text = txt; segs[segs.length - 1].push(piece); }
+      });
+    });
+    return segs;
+  }
+  // A paragraph with tab stops: lay its segments out in a flex row; the gap before each
+  // segment is a filler that draws the tab's leader (dots / dashes / underline). The
+  // right-most stop ends up at the right edge (e.g. a TOC page number); intermediate
+  // stops are spaced evenly rather than at their absolute twip positions.
+  function tabLine(p, st) {
+    var segs = tabSegments(p.runs), tabs = p.pp.tabs || [], h = '<p class="tabline"' + (st ? ' style="' + st + '"' : "") + ">";
+    for (var i = 0; i < segs.length; i++) {
+      if (i > 0) {
+        var t = tabs[i - 1] || {}, lead = (t.leader && t.leader !== "none" && t.leader !== "middot") ? " " + t.leader : "";
+        h += '<span class="tfill' + lead + '"></span>';
+      }
+      h += '<span class="tseg">' + (runsHtml(segs[i]) || "") + "</span>";
+    }
+    return h + "</p>";
+  }
   function renderModel(paras) {
     var html = "", i = 0, listTag = null;
     function closeList() { if (listTag) { html += "</" + listTag + ">"; listTag = null; } }
@@ -353,7 +388,9 @@
         } else {
           closeList();
           var st = alignCss + ppCss(p.pp);  // alignment + spacing/indentation
-          html += "<p" + (st ? ' style="' + st + '"' : "") + ">" + (inner || "<br>") + "</p>";
+          var hasTabs = p.pp && p.pp.tabs && p.pp.tabs.length && (p.runs || []).some(function (r) { return r.text && r.text.indexOf("\t") >= 0; });
+          if (hasTabs) html += tabLine(p, st);
+          else html += "<p" + (st ? ' style="' + st + '"' : "") + ">" + (inner || "<br>") + "</p>";
         }
         i++;
       }
