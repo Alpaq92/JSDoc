@@ -270,6 +270,16 @@
     if (pp.spB) c += "margin-top:" + (pp.spB / 20) + "pt;";
     if (pp.spA) c += "margin-bottom:" + (pp.spA / 20) + "pt;";
     if (pp.line) c += "line-height:" + (pp.lineMult ? (pp.line / 240) : (Math.abs(pp.line) / 20) + "pt") + ";";
+    if (pp.shd != null) c += "background-color:rgb(" + (pp.shd & 255) + "," + ((pp.shd >> 8) & 255) + "," + ((pp.shd >> 16) & 255) + ");";
+    if (pp.borders) {
+      ["top", "right", "bottom", "left"].forEach(function (side) {
+        var b = pp.borders[side]; if (!b) return;
+        var col = b.color == null ? "currentColor" : "rgb(" + (b.color & 255) + "," + ((b.color >> 8) & 255) + "," + ((b.color >> 16) & 255) + ")";
+        var st = b.type === 3 ? "double" : (b.type >= 5 && b.type <= 10) ? "dashed" : "solid";
+        c += "border-" + side + ":" + (b.width || 1) + "pt " + st + " " + col + ";";
+      });
+      c += "padding:3pt 7pt;";   // breathing room inside the box
+    }
     return c;
   }
   function runStyle(r) {

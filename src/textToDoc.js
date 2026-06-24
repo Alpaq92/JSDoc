@@ -474,6 +474,18 @@
           pp.tabs.forEach(function (t) { td.push(((WR_TAB_JC[t.align] || 0) & 7) | (((WR_TAB_TLC[t.leader] || 0) & 7) << 3)); }); // rgtbdAdd (TBD: jc | tlc<<3)
           g.push(0x0D, 0xC6, td.length & 0xFF); for (var ti = 0; ti < td.length; ti++) g.push(td[ti]);
         }
+        if (pp.shd != null) {                                  // sprmPShd: paragraph fill (SHDOperand: cb=10 + Shd; cvFore = fill)
+          var pf = pp.shd & 0xFFFFFF;
+          g.push(0x4D, 0xC6, 10, pf & 0xFF, (pf >> 8) & 0xFF, (pf >> 16) & 0xFF, 0, 0, 0, 0, 0, 0x34, 0);
+        }
+        if (pp.borders) {                                      // sprmPBrcTop/Left/Bottom/Right (BrcOperand: cb=8 + Brc)
+          ['top', 'left', 'bottom', 'right'].forEach(function (side, k) {
+            var bd = pp.borders[side]; if (!bd) return;
+            var cv = (bd.color == null ? 0 : bd.color) & 0xFFFFFF, ca = bd.color == null ? 0xFF : 0;
+            var w8 = Math.max(2, Math.round((bd.width || 0.5) * 8)) & 0xFF;   // dptLineWidth in 1/8 pt
+            g.push(0x4E + k, 0xC6, 8, cv & 0xFF, (cv >> 8) & 0xFF, (cv >> 16) & 0xFF, ca, w8, bd.type || 1, 0, 0);
+          });
+        }
       }
       return g.length ? papxInFkp(g) : PNORMAL;
     }
