@@ -262,6 +262,9 @@
     var cb = op.length + 1;   // sprmTDefTable's 2-byte cb counts dataLen + 1 (matches what Word writes)
     return [0x08, 0xD6, cb & 0xFF, (cb >> 8) & 0xFF].concat(op);
   }
+  // Tab-stop TBD field maps (model strings -> jc/tlc codes), the inverse of the reader's.
+  var WR_TAB_JC = { left: 0, center: 1, right: 2, decimal: 3, bar: 4 };
+  var WR_TAB_TLC = { none: 0, dot: 1, hyphen: 2, underscore: 3, heavy: 4, middot: 5 };
   // 16-colour palette as COLORREFs (0x00BBGGRR), for the legacy Shd80's ico fields.
   var WR_ICO = [0, 0, 0xFF0000, 0xFFFF00, 0x00FF00, 0xFF00FF, 0x0000FF, 0x00FFFF, 0xFFFFFF, 0x800000, 0x808000, 0x008000, 0x800080, 0x000080, 0x008080, 0x808080, 0xC0C0C0];
   function icoOf(cref) {                  // nearest palette index for a COLORREF fill
@@ -465,6 +468,12 @@
         if (pp.keepLines) g.push(0x05, 0x24, 1);               // sprmPFKeep (keep lines together)
         if (pp.keepNext) g.push(0x06, 0x24, 1);                // sprmPFKeepFollow (keep with next)
         if (pp.pageBreak) g.push(0x07, 0x24, 1);               // sprmPFPageBreakBefore
+        if (pp.tabs && pp.tabs.length) {                       // sprmPChgTabsPapx: custom tab stops (PChgTabsPapxOperand)
+          var td = [0, pp.tabs.length & 0xFF];                 // PChgTabsDel (cTabs = 0), then PChgTabsAdd.cTabs
+          pp.tabs.forEach(function (t) { var x = t.pos | 0; td.push(x & 0xFF, (x >> 8) & 0xFF); });   // rgdxaAdd (XAS, twips)
+          pp.tabs.forEach(function (t) { td.push(((WR_TAB_JC[t.align] || 0) & 7) | (((WR_TAB_TLC[t.leader] || 0) & 7) << 3)); }); // rgtbdAdd (TBD: jc | tlc<<3)
+          g.push(0x0D, 0xC6, td.length & 0xFF); for (var ti = 0; ti < td.length; ti++) g.push(td[ti]);
+        }
       }
       return g.length ? papxInFkp(g) : PNORMAL;
     }
