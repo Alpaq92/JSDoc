@@ -434,7 +434,7 @@
     function paraIsTtp(fc) { var r = papx ? runAt(papx, fc) : null; return !!(r && r.ttp); }   // is this 0x07 the row terminator?
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
-      doc[nm] = extractRange(wd, pieces, a, b, isDeleted);
+      doc[nm] = extractRange(wd, pieces, a, b, isDeleted, paraIsTtp);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
       doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, paraIsTtp, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
     }
@@ -1038,11 +1038,10 @@
   // CP order (PlcPcd aCP is sorted), so we take each piece's overlap with the
   // range. Decodes, strips field codes/control marks, and drops any chars whose
   // WordDocument offset is in a tracked-deletion range (isDeleted).
-  function extractRange(wd, pieces, lo, hi, isDeleted) {
+  function extractRange(wd, pieces, lo, hi, isDeleted, paraIsTtp) {
     if (hi <= lo) return '';
     var out = [];
     var fieldStack = []; // per open field: true while inside its instruction
-    var state = { cells: 0 }; // run of pending table cell marks (0x07)
 
     for (var i = 0; i < pieces.length; i++) {
       var pc = pieces[i];
@@ -1058,8 +1057,7 @@
           if (isDeleted && isDeleted(base + k)) continue; // tracked-change deletion
           var byte = wd[base + k];
           if (byte === undefined) break;
-          emit(out, fieldStack, state,
-            byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte));
+          emit(out, fieldStack, byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte), base + k, paraIsTtp);
         }
       } else {
         var u = pc.offset + start * 2;
@@ -1067,11 +1065,10 @@
           if (isDeleted && isDeleted(u + m * 2)) continue; // tracked-change deletion
           var loB = wd[u + m * 2];
           if (loB === undefined) break;
-          emit(out, fieldStack, state, loB | ((wd[u + m * 2 + 1] || 0) << 8));
+          emit(out, fieldStack, loB | ((wd[u + m * 2 + 1] || 0) << 8), u + m * 2, paraIsTtp);
         }
       }
     }
-    flushCells(out, state); // a row mark may be the very last thing in a story
     return out.join('');
   }
 
@@ -1104,6 +1101,7 @@
     if (p.u && UL_STYLE[p.u]) css += 'text-decoration-style:' + UL_STYLE[p.u] + ';';  // double / dotted / dashed / wavy
     if (p.smallCaps) css += 'font-variant:small-caps;';
     if (p.caps) css += 'text-transform:uppercase;';
+    if (p.hidden) css += 'opacity:0.5;';                                      // hidden text (sprmCFVanish) — dimmed, not dropped
     var sup = p.iss === 1, sub = p.iss === 2;                                 // super/subscript: raise/lower and shrink
     if (sup) css += 'vertical-align:super;';
     else if (sub) css += 'vertical-align:sub;';
@@ -1188,15 +1186,15 @@
   function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, paraIsTtp, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], lastCellPara = null;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
-    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false };
+    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false, hidden: false };
     function props(p) {
       var color = null;
       if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) color = p.cv & 0xFFFFFF; // already 0x00BBGGRR
       var va = p.iss === 1 ? 'super' : p.iss === 2 ? 'sub' : null;          // sprmCSs
       var hl = (p.highlightIco > 1 && p.highlightIco <= 16 && ICO_CV[p.highlightIco]) ? ICO_CV[p.highlightIco] : null; // sprmCHighlight -> COLORREF
-      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl, uStyle: (p.u && UL_STYLE[p.u]) || null, smallCaps: !!p.smallCaps, caps: !!p.caps };
+      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl, uStyle: (p.u && UL_STYLE[p.u]) || null, smallCaps: !!p.smallCaps, caps: !!p.caps, hidden: !!p.hidden };
     }
-    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight + '|' + pp.uStyle + '|' + pp.smallCaps + '|' + pp.caps; }
+    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight + '|' + pp.uStyle + '|' + pp.smallCaps + '|' + pp.caps + '|' + pp.hidden; }
     // A HYPERLINK field instruction is `HYPERLINK "addr" [switches]`; the address
     // is the first quoted token (or first bare token for an unquoted URL).
     function parseHyperlink(s) {
@@ -1204,7 +1202,7 @@
       var q = /"([^"]+)"/.exec(m[1]); if (q) return q[1];
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
-    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curProps.uStyle) r.uStyle = curProps.uStyle; if (curProps.smallCaps) r.smallCaps = true; if (curProps.caps) r.caps = true; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
+    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curProps.uStyle) r.uStyle = curProps.uStyle; if (curProps.smallCaps) r.smallCaps = true; if (curProps.caps) r.caps = true; if (curProps.hidden) r.hidden = true; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
     function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
     // Each cell mark (0x07) closes one cell; the row's terminator mark (sprmPFTtp)
     // promotes that row's last cell to the rowEnd and attaches the column boundaries /
@@ -1289,30 +1287,24 @@
   // dropped; the result region (0x14..0x15) is kept. Nesting is tracked with a
   // stack so a nested field inside an outer instruction is dropped too.
   //
-  // Table cell marks (0x07) are buffered as a run: in the binary format every
-  // cell ends with a 0x07 and the row terminator adds one more, so a single
-  // 0x07 is a column separator (-> tab) while two or more together mark the end
-  // of a table row (-> newline). Empty cells can blur this; a fully accurate
-  // split would need paragraph properties (sprmPFTtp), but this matches Word for
-  // the common case and keeps tables readable instead of one endless line.
-  function emit(out, fieldStack, state, code) {
-    if (code === 0x13) { flushCells(out, state); fieldStack.push(true); return; }
-    if (code === 0x14) { flushCells(out, state); if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
-    if (code === 0x15) { flushCells(out, state); if (fieldStack.length) fieldStack.pop(); return; }
+  // Table cell marks: every cell ends with a 0x07, and the row's terminator
+  // paragraph (sprmPFTtp) adds one more. Each cell mark becomes a tab; the
+  // terminator becomes a newline (rewriting the row's trailing tab), so empty
+  // cells stay as empty columns instead of collapsing or splitting the row.
+  function emit(out, fieldStack, code, fc, isTtp) {
+    if (code === 0x13) { fieldStack.push(true); return; }
+    if (code === 0x14) { if (fieldStack.length) fieldStack[fieldStack.length - 1] = false; return; }
+    if (code === 0x15) { if (fieldStack.length) fieldStack.pop(); return; }
     for (var i = 0; i < fieldStack.length; i++) {
       if (fieldStack[i]) return; // inside some field's instruction
     }
-    if (code === 0x07) { state.cells++; return; } // buffer the cell-mark run
-    flushCells(out, state);
+    if (code === 0x07) {
+      if (isTtp && isTtp(fc)) { if (out.length && out[out.length - 1] === '\t') out.pop(); out.push('\n'); }
+      else out.push('\t');
+      return;
+    }
     var ch = mapChar(code);
     if (ch !== '') out.push(ch);
-  }
-
-  // Flush a pending run of cell marks: one -> column tab, two or more -> newline.
-  function flushCells(out, state) {
-    if (state.cells === 1) out.push('\t');
-    else if (state.cells >= 2) out.push('\n');
-    state.cells = 0;
   }
 
   // Map a decoded character to output text. Structural control marks become

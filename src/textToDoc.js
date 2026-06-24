@@ -162,6 +162,7 @@
     if (r.strike) sprm(b, 0x0837, [1]);       // sprmCFStrike
     if (r.smallCaps) sprm(b, 0x083A, [1]);    // sprmCFSmallCaps
     if (r.caps) sprm(b, 0x083B, [1]);         // sprmCFCaps (all caps)
+    if (r.hidden) sprm(b, 0x083C, [1]);       // sprmCFVanish (hidden text)
     if (r.u) sprm(b, 0x2A3E, [WR_UL[r.uStyle] || 1]);  // sprmCKul (1 single, 3 double, 4 dotted, 7 dash, 11 wave)
     if (r.va === 'super') sprm(b, 0x2A48, [1]);          // sprmCSs = 1 (superscript)
     else if (r.va === 'sub') sprm(b, 0x2A48, [2]);       // sprmCSs = 2 (subscript)
@@ -355,6 +356,7 @@
     if (r.uStyle) n.uStyle = r.uStyle;                     // underline style (double/dotted/dashed/wavy)
     if (r.smallCaps) n.smallCaps = true;                   // small caps
     if (r.caps) n.caps = true;                             // all caps
+    if (r.hidden) n.hidden = true;                         // hidden text
     if (r.url) n.url = String(r.url);
     return n;
   }
