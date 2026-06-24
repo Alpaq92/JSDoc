@@ -203,9 +203,9 @@ var mgRow = docToText.model(textToDoc([
 ])).body.filter(function (p) { return p.kind === 'rowEnd'; })[0];
 check('cell merge flags round-trip (TC80 tcgrf -> tblMerge)',
   !!mgRow && Array.isArray(mgRow.tblMerge) && !!mgRow.tblMerge[0] && mgRow.tblMerge[0].h === 'start' && mgRow.tblMerge[1].h === 'cont');
-// The generated showcase sample: a one-cell merged header (its rgdxaCenter spans the
-// table) plus shaded status cells AND character extras (super/subscript + highlight),
-// all surviving a read-back.
+// The generated showcase sample exercises everything in one document: a one-cell merged
+// header, shaded status cells, an empty cell, character extras, tab stops, a shaded +
+// bordered callout, and bookmarks — all surviving a read-back.
 var mshModel = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 'feature-showcase.doc')));
 var mshRows = mshModel.body.filter(function (p) { return p.kind === 'rowEnd'; });
 check('sample: merged header is a one-cell, full-width row',
@@ -217,6 +217,15 @@ check('sample: shows superscript and subscript',
   mshRuns.some(function (r) { return r.va === 'super'; }) && mshRuns.some(function (r) { return r.va === 'sub'; }));
 check('sample: shows highlighted runs',
   mshRuns.filter(function (r) { return r.highlight != null; }).length >= 2);
+check('sample: has tab-stop paragraphs (dot leader)',
+  mshModel.body.some(function (p) { return p.pp && p.pp.tabs && p.pp.tabs.some(function (t) { return t.leader === 'dot'; }); }));
+check('sample: has a shaded + bordered callout paragraph',
+  mshModel.body.some(function (p) { return p.pp && p.pp.shd != null && p.pp.borders && p.pp.borders.top; }));
+check('sample: has an empty table cell',
+  mshModel.body.filter(function (p) { return (p.kind === 'cell' || p.kind === 'rowEnd') && (!p.runs || !p.runs.length); }).length >= 1);
+check('sample: has bookmarks landing on the named text',
+  Array.isArray(mshModel.bookmarks) && mshModel.bookmarks.length >= 2 &&
+  mshModel.bookmarks.some(function (b) { return b.name === 'highlightedTerm'; }));
 // A REAL Word-saved table (not our writer): its "Merge Cells" header reads back as one
 // full-width cell, and its shaded cell's fill is read from sprmTDefTableShd. Proves the
 // reader handles genuine Word output — in particular the 2-byte sprmTDefTable cb, whose
