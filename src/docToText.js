@@ -422,6 +422,8 @@
       if (r.keepL) pp.keepLines = 1;      // keep lines together
       if (r.pgBrk) pp.pageBreak = 1;      // page break before
       if (r.tabs) pp.tabs = r.tabs;       // tab stops [{ pos (twips), align, leader }]
+      if (r.pShd != null) pp.shd = r.pShd; // paragraph background fill (COLORREF)
+      if (r.pBrc) pp.borders = r.pBrc;    // box borders { top/left/bottom/right: { color, width (pt), type } }
       return Object.keys(pp).length ? pp : null;
     }
     // The table row's column boundaries (rgdxaCenter twips), from sprmTDefTable on
@@ -757,7 +759,7 @@
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
       var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
-      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0, tblShd = null, tblMerge = null, ttp = 0, tabs = null;
+      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0, tblShd = null, tblMerge = null, ttp = 0, tabs = null, pShd = null, pBrc = null;
       if (bOff) {
         var papx = pageOff + bOff * 2;                   // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
@@ -820,11 +822,30 @@
               var scb = wd[gp + 2], sn = Math.floor(scb / 10);             // 1-byte cb; cvFore is the fill (R,G,B,fAuto)
               if (sn > 0 && sn < 64 && gp + 3 + sn * 10 <= pageOff + 512) { tblShd = []; for (var sj = 0; sj < sn; sj++) { var so = gp + 3 + sj * 10; tblShd.push(wd[so + 3] === 0 ? (wd[so] | (wd[so + 1] << 8) | (wd[so + 2] << 16)) : null); } }
             }
+            else if (sc === 0xC64D) {                                      // sprmPShd: paragraph background (SHDOperand: cb + Shd 10)
+              var ps = gp + 3;                                             // Shd: cvFore(4) cvBack(4) ipat(2); fill is cvFore, else cvBack
+              if (wd[ps + 3] === 0) pShd = (wd[ps] | (wd[ps + 1] << 8) | (wd[ps + 2] << 16));
+              else if (wd[ps + 7] === 0) pShd = (wd[ps + 4] | (wd[ps + 5] << 8) | (wd[ps + 6] << 16));
+            }
+            else if (sc === 0x442D) {                                      // sprmPShd80: Shd80 (2 bytes): ipat<<10 | icoBack<<5 | icoFore
+              var s80 = wd[gp + 2] | (wd[gp + 3] << 8), icoF = s80 & 0x1F;
+              if (icoF > 1 && icoF <= 16 && ICO_CV[icoF]) pShd = ICO_CV[icoF];
+            }
+            else if (sc >= 0xC64E && sc <= 0xC651) {                       // sprmPBrcTop/Left/Bottom/Right (BrcOperand: cb=8 + Brc 8)
+              var bt = wd[gp + 8];                                         // Brc: cv(4) dptLineWidth(1) brcType(1) +2
+              if (bt && bt !== 0xFF) { (pBrc = pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0xC64E]] =
+                { color: wd[gp + 6] === 0 ? (wd[gp + 3] | (wd[gp + 4] << 8) | (wd[gp + 5] << 16)) : null, width: bt < 0x40 ? wd[gp + 7] / 8 : wd[gp + 7], type: bt }; }
+            }
+            else if (sc >= 0x6424 && sc <= 0x6427) {                       // sprmPBrcTop80/... (legacy Brc80, 4 bytes)
+              var bt2 = wd[gp + 3], ico2 = wd[gp + 4];                     // Brc80: dptLineWidth, brcType, ico, flags
+              if (bt2 && bt2 !== 0xFF) { (pBrc = pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0x6424]] =
+                { color: (ico2 > 1 && ico2 <= 16 && ICO_CV[ico2]) ? ICO_CV[ico2] : null, width: wd[gp + 2] / 8, type: bt2 }; }
+            }
             gp += 2 + ol; if (ol <= 0) break;
           }
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk, tblShd: tblShd, tblMerge: tblMerge, ttp: ttp, tabs: tabs });
+      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk, tblShd: tblShd, tblMerge: tblMerge, ttp: ttp, tabs: tabs, pShd: pShd, pBrc: pBrc });
     }
   }
 

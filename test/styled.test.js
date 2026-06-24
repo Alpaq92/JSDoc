@@ -320,6 +320,23 @@ check('bookmarks come back sorted by start (overlap/nesting resolved via ibkl)',
 check('a doc with no bookmarks carries no model.bookmarks',
   docToText.model(textToDoc('plain')).bookmarks === undefined);
 
+// 16d) Paragraph shading (sprmPShd) + box borders (sprmPBrcTop/Left/Bottom/Right): the
+// fill COLORREF and each side's colour / width (pt) / type round-trip through pp. Brc /
+// Shd byte layout taken from the [MS-DOC] spec (the cell-shading work already validated
+// the Shd path against a Word-saved reference).
+var pbPP = docToText.model(textToDoc([{ runs: [{ text: 'box' }], kind: 'p', pp: {
+  shd: 0x00FFFF,
+  borders: { top: { color: 0x0000FF, width: 1, type: 1 }, bottom: { color: 0x00FF00, width: 1.5, type: 1 } }
+} }])).body[0].pp;
+check('paragraph shading round-trips (sprmPShd fill COLORREF)', !!pbPP && pbPP.shd === 0x00FFFF);
+check('paragraph border sides round-trip (colour + width, only set sides)',
+  !!pbPP && !!pbPP.borders &&
+  !!pbPP.borders.top && pbPP.borders.top.color === 0x0000FF && pbPP.borders.top.width === 1 &&
+  !!pbPP.borders.bottom && pbPP.borders.bottom.color === 0x00FF00 && pbPP.borders.bottom.width === 1.5 &&
+  !pbPP.borders.left && !pbPP.borders.right);
+check('a plain paragraph carries no shd / borders',
+  (function () { var pp = docToText.model(textToDoc('plain')).body[0].pp || {}; return pp.shd === undefined && pp.borders === undefined; })());
+
 // 17) Floating-shape positions: the reader exposes each text box's FSPA bounding box
 // (page coordinates, twips) as model.shapes, so the demo can place it where the
 // document actually puts it rather than at its text anchor.
