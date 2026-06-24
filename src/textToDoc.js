@@ -759,6 +759,32 @@
       var bb = nc * 4; bkd[bb + 5] = 0x08; bkd[bb + 6] = 0xFF; bkd[bb + 7] = 0xFF;                  // BKD[0]=..0x0800, BKD[1]=0xffff..
       txbBkdOff = append(bkd); txbBkdLen = bkd.length;
     }
+    // Standard bookmarks: SttbfBkmk (#21, names) + Plcfbkf (#22, start CPs + FBKF) +
+    // Plcfbkl (#23, end CPs). Starts and ends are each sorted ascending (PLC rule); the
+    // FBKF.ibkl of start j points at start j's end in the Plcfbkl, so the pairing survives
+    // even when ranges nest or overlap.
+    var bkmkSttbOff = -1, bkmkBkfOff = -1, bkmkBklOff = -1, bkmkSttbLen = 0, bkmkBkfLen = 0, bkmkBklLen = 0;
+    var bkmks = (input && !Array.isArray(input) && Array.isArray(input.bookmarks)) ? input.bookmarks : null;
+    if (bkmks && bkmks.length) {
+      var clampCp = function (v) { v = v | 0; return v < 0 ? 0 : v > ccpText ? ccpText : v; };
+      var so = bkmks.map(function (b) { var s = clampCp(b.start); return { name: String(b.name == null ? '' : b.name), start: s, end: Math.max(s, clampCp(b.end == null ? b.start : b.end)) }; })
+        .sort(function (a, b) { return a.start - b.start; });                 // SttbfBkmk / Plcfbkf order
+      var eo = so.map(function (b, j) { return { end: b.end, j: j }; }).sort(function (a, b) { return a.end - b.end || a.j - b.j; }); // Plcfbkl order
+      var ibklOf = []; eo.forEach(function (e, k) { ibklOf[e.j] = k; });
+      var N = so.length, sLen = 6;
+      so.forEach(function (b) { sLen += 2 + b.name.length * 2; });
+      var sttb = new Uint8Array(sLen); u16(sttb, 0, 0xFFFF); u16(sttb, 2, N); u16(sttb, 4, 0);   // fExtend, cData, cbExtra
+      var sp = 6; so.forEach(function (b) { u16(sttb, sp, b.name.length); sp += 2; for (var ci = 0; ci < b.name.length; ci++) { u16(sttb, sp, b.name.charCodeAt(ci) & 0xFFFF); sp += 2; } });
+      var bkf = new Uint8Array((N + 1) * 4 + N * 4);                          // (N+1) start CPs + N FBKF(ibkl,bkc)
+      for (var bi = 0; bi < N; bi++) { u32(bkf, bi * 4, so[bi].start); u16(bkf, (N + 1) * 4 + bi * 4, ibklOf[bi]); }
+      u32(bkf, N * 4, docEndLim);
+      var bkl = new Uint8Array((N + 1) * 4);                                  // (N+1) end CPs, no per-element data
+      for (bi = 0; bi < N; bi++) u32(bkl, bi * 4, eo[bi].end);
+      u32(bkl, N * 4, docEndLim);
+      bkmkSttbOff = append(sttb); bkmkSttbLen = sttb.length;
+      bkmkBkfOff = append(bkf); bkmkBkfLen = bkf.length;
+      bkmkBklOff = append(bkl); bkmkBklLen = bkl.length;
+    }
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
@@ -780,6 +806,7 @@
     if (atnRefOff >= 0) setPair(4, atnRefOff, atnRefBytes.length); // PlcfandRef
     if (atnTxtOff >= 0) setPair(5, atnTxtOff, atnTxtBytes.length); // PlcfandTxt
     if (hddOff >= 0) setPair(11, hddOff, hddBytes.length); // PlcfHdd (headers/footers)
+    if (bkmkSttbOff >= 0) { setPair(21, bkmkSttbOff, bkmkSttbLen); setPair(22, bkmkBkfOff, bkmkBkfLen); setPair(23, bkmkBklOff, bkmkBklLen); } // bookmarks
 
     // Page setup: rebuild the first section's SEPX from input.page. Margins
     // (sprmSDyaTop 0x9023 / Bottom 0x9024 / sprmSDxaLeft 0xB021 / Right 0xB022) and

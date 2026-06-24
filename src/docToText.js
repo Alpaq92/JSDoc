@@ -467,6 +467,9 @@
     // Floating-shape (text-box) positions, so the demo can place them on the page.
     var shapes = parseShapes(tableBytes, fibRgFcLcbStart, dv);
     if (shapes) doc.model.shapes = shapes;
+    // Standard bookmarks (named CP ranges) as model.bookmarks = [{ name, start, end }].
+    var bookmarks = parseBookmarks(tableBytes, fibRgFcLcbStart, dv);
+    if (bookmarks) doc.model.bookmarks = bookmarks;
     return doc;
   }
 
@@ -841,6 +844,40 @@
       var dv = new DataView(table.buffer, table.byteOffset, table.byteLength), map = {};
       for (var i = 0; i < n; i++) map[dv.getUint32(fc + i * 4, true)] = i;
       return map;
+    } catch (e) { return null; }
+  }
+
+  // Standard bookmarks: SttbfBkmk (#21, names), Plcfbkf (#22, start CPs + FBKF) and
+  // Plcfbkl (#23, end CPs). Bookmark i: name = SttbfBkmk[i], start = Plcfbkf.cp[i],
+  // end = Plcfbkl.cp[FBKF[i].ibkl] (the ibkl index pairs a start with its end so
+  // nested/overlapping ranges resolve). Returns [{ name, start, end }] (CPs) or null.
+  function parseBookmarks(table, fibStart, fibDv) {
+    try {
+      var dv = new DataView(table.buffer, table.byteOffset, table.byteLength), tlen = table.length;
+      var sFc = fibDv.getUint32(fibStart + 21 * 8, true), sLcb = fibDv.getUint32(fibStart + 21 * 8 + 4, true);
+      var fFc = fibDv.getUint32(fibStart + 22 * 8, true), fLcb = fibDv.getUint32(fibStart + 22 * 8 + 4, true);
+      var lFc = fibDv.getUint32(fibStart + 23 * 8, true), lLcb = fibDv.getUint32(fibStart + 23 * 8 + 4, true);
+      if (sLcb < 6 || fLcb < 12 || lLcb < 8) return null;
+      if (sFc + sLcb > tlen || fFc + fLcb > tlen || lFc + lLcb > tlen) return null;
+      var n = Math.floor((fLcb - 4) / 8);                       // Plcfbkf: (N+1) CPs + N FBKF(4 bytes)
+      if (n < 1) return null;
+      // SttbfBkmk names (extended/UTF-16 STTB: fExtend, cData, cbExtra, then cch+chars).
+      var names = [], p = sFc, sEnd = sFc + sLcb;
+      if (dv.getUint16(p, true) === 0xFFFF) p += 2;
+      var cData = dv.getUint16(p, true); p += 2; var cbExtra = dv.getUint16(p, true); p += 2;
+      for (var i = 0; i < cData && p + 2 <= sEnd; i++) {
+        var cch = dv.getUint16(p, true); p += 2;
+        var nm = '';
+        for (var c = 0; c < cch && p + 2 <= sEnd; c++) { nm += String.fromCharCode(dv.getUint16(p, true)); p += 2; }
+        p += cbExtra; names.push(nm);
+      }
+      var fbkfBase = fFc + (n + 1) * 4, lEnd = lFc + lLcb, out = [];
+      for (i = 0; i < n; i++) {
+        var startCp = dv.getInt32(fFc + i * 4, true), ibkl = dv.getUint16(fbkfBase + i * 4, true);
+        var endCp = (lFc + ibkl * 4 + 4 <= lEnd) ? dv.getInt32(lFc + ibkl * 4, true) : startCp;
+        out.push({ name: names[i] != null ? names[i] : '', start: startCp, end: endCp });
+      }
+      return out.length ? out : null;
     } catch (e) { return null; }
   }
 
