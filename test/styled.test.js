@@ -272,6 +272,26 @@ var shp = docToText.model(fs.readFileSync(path.join(__dirname, '..', 'samples', 
 check('text-box FSPA position is exposed (model.shapes)',
   Array.isArray(shp) && shp.length === 1 && shp[0].xL > 0 && shp[0].yT > 0 && shp[0].xR > shp[0].xL && shp[0].yB > shp[0].yT);
 
+// 18) Character extras: superscript/subscript (sprmCSs) and highlight (sprmCHighlight)
+// round-trip through the model. Highlight is a 16-colour palette index, surfaced in the
+// model as a COLORREF the same way text colour is. (The reader is also confirmed to read
+// real superscript out of a word-processor-saved doc, not just our own bytes.)
+var chx = docToText.model(textToDoc([{ runs: [
+  { text: 'E=mc' }, { text: 'sup', va: 'super' }, { text: ' H' }, { text: 'sub', va: 'sub' },
+  { text: 'O ' }, { text: 'lit', highlight: 0x00FFFF }   // yellow (COLORREF 0x00BBGGRR)
+], kind: 'p' }])).body[0].runs;
+function rget(txt) { for (var ci = 0; ci < chx.length; ci++) if (chx[ci].text === txt) return chx[ci]; return null; }
+check('superscript round-trips (sprmCSs=1 -> va:super)', !!rget('sup') && rget('sup').va === 'super');
+check('subscript round-trips (sprmCSs=2 -> va:sub)', !!rget('sub') && rget('sub').va === 'sub');
+check('a plain run carries no super/subscript', !!rget('E=mc') && rget('E=mc').va == null);
+check('highlight round-trips as a palette COLORREF (sprmCHighlight)', !!rget('lit') && rget('lit').highlight === 0x00FFFF);
+// The styled-HTML output renders both.
+var chHtml = docToText.html(textToDoc([{ runs: [
+  { text: 'a' }, { text: 'b', va: 'super' }, { text: ' ' }, { text: 'c', highlight: 0x00FFFF }
+], kind: 'p' }])).body;
+check('styled HTML renders superscript (vertical-align)', /vertical-align:super/.test(chHtml));
+check('styled HTML renders highlight (background-color)', /background-color:/.test(chHtml));
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).
