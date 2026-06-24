@@ -585,6 +585,8 @@
         case 0x0837: p.strike = (wd[q] & 1) === 1; break;     // strikethrough
         case 0x083C: p.hidden = (wd[q] & 1) === 1; break;     // vanish (hidden text)
         case 0x2A3E: p.u = wd[q]; break;                       // underline kind (0 = none)
+        case 0x2A48: p.iss = wd[q]; break;                     // sprmCSs: 0 none, 1 superscript, 2 subscript
+        case 0x2A0C: p.highlightIco = wd[q]; break;            // sprmCHighlight: 16-colour palette index (0 = none)
         case 0x4A43: p.hps = wd[q] | (wd[q + 1] << 8); break;  // font size, half-points
         case 0x2A42: p.ico = wd[q]; break;                     // color, 16-colour palette index
         case 0x6870: p.cv = (wd[q] | (wd[q + 1] << 8) | (wd[q + 2] << 16)) >>> 0; break; // 24-bit RGB
@@ -1014,10 +1016,15 @@
     if (p.u) deco += 'underline ';
     if (p.strike) deco += 'line-through ';
     if (deco) css += 'text-decoration:' + deco.trim() + ';';
-    if (p.hps) css += 'font-size:' + (p.hps / 2) + 'pt;';
+    var sup = p.iss === 1, sub = p.iss === 2;                                 // super/subscript: raise/lower and shrink
+    if (sup) css += 'vertical-align:super;';
+    else if (sub) css += 'vertical-align:sub;';
+    if (p.hps) css += 'font-size:' + ((sup || sub) ? (p.hps / 2 * 0.67).toFixed(1) : (p.hps / 2)) + 'pt;';
+    else if (sup || sub) css += 'font-size:smaller;';
     if (p.font) css += "font-family:'" + p.font.replace(/['\\<>]/g, '') + "';";
     var col = colorOf(p);
     if (col) css += 'color:' + col + ';';
+    if (p.highlightIco > 1 && p.highlightIco < ICO_PALETTE.length && ICO_PALETTE[p.highlightIco]) css += 'background-color:' + ICO_PALETTE[p.highlightIco] + ';';  // sprmCHighlight
     return css;
   }
   function colorOf(p) {
@@ -1093,13 +1100,15 @@
   function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], cells = 0, lastCellFc = null;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
-    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null };
+    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null };
     function props(p) {
       var color = null;
       if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) color = p.cv & 0xFFFFFF; // already 0x00BBGGRR
-      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color };
+      var va = p.iss === 1 ? 'super' : p.iss === 2 ? 'sub' : null;          // sprmCSs
+      var hl = (p.highlightIco > 1 && p.highlightIco <= 16 && ICO_CV[p.highlightIco]) ? ICO_CV[p.highlightIco] : null; // sprmCHighlight -> COLORREF
+      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl };
     }
-    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color; }
+    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight; }
     // A HYPERLINK field instruction is `HYPERLINK "addr" [switches]`; the address
     // is the first quoted token (or first bare token for an unquoted URL).
     function parseHyperlink(s) {
@@ -1107,7 +1116,7 @@
       var q = /"([^"]+)"/.exec(m[1]); if (q) return q[1];
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
-    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
+    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
     function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
     // The row's column boundaries (rgdxaCenter) live in the PAPX of the row-terminator
     // mark (the last 0x07 seen), so resolve them there and attach to the rowEnd cell.

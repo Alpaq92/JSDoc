@@ -161,8 +161,11 @@
     if (r.i) sprm(b, 0x0836, [1]);            // sprmCFItalic
     if (r.strike) sprm(b, 0x0837, [1]);       // sprmCFStrike
     if (r.u) sprm(b, 0x2A3E, [1]);            // sprmCKul = 1 (single underline)
+    if (r.va === 'super') sprm(b, 0x2A48, [1]);          // sprmCSs = 1 (superscript)
+    else if (r.va === 'sub') sprm(b, 0x2A48, [2]);       // sprmCSs = 2 (subscript)
     if (r.size) { var hp = Math.round(r.size * 2); sprm(b, 0x4A43, [hp, hp >> 8]); }      // sprmCHps (half-points)
     if (r.color != null) sprm(b, 0x6870, [r.color, r.color >> 8, r.color >> 16, 0]);     // sprmCCv (COLORREF)
+    if (r.highlight != null) sprm(b, 0x2A0C, [icoOf(r.highlight) & 0xFF]);                // sprmCHighlight (16-colour palette index)
     if (ftc != null) sprm(b, 0x4A4F, [ftc, ftc >> 8]);   // sprmCRgFtc0 (font index into SttbfFfn)
     return b;
   }
@@ -340,6 +343,8 @@
     if (r.comRef != null) return { comRef: r.comRef };   // comment-reference anchor (no text)
     if (r.tbxRef != null) return { tbxRef: r.tbxRef };   // text-box (drawn-object) anchor (no text)
     var n = { text: String(r.text == null ? '' : r.text), b: !!r.b, i: !!r.i, u: !!r.u, strike: !!r.strike, size: r.size || null, font: r.font || null, color: r.color == null ? null : r.color };
+    if (r.va === 'super' || r.va === 'sub') n.va = r.va;   // vertical alignment (super/subscript)
+    if (r.highlight != null) n.highlight = r.highlight;    // highlight fill (COLORREF)
     if (r.url) n.url = String(r.url);
     return n;
   }

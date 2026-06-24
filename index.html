@@ -267,9 +267,14 @@
     if (r.i) css += "font-style:italic;";
     var deco = (r.u ? "underline " : "") + (r.strike ? "line-through" : "");
     if (deco.trim()) css += "text-decoration:" + deco.trim() + ";";
-    if (r.size) css += "font-size:" + r.size + "pt;";
+    var sup = r.va === "super", sub = r.va === "sub";   // super/subscript: raise/lower and shrink ~2/3
+    if (sup) css += "vertical-align:super;";
+    else if (sub) css += "vertical-align:sub;";
+    if (r.size) css += "font-size:" + (sup || sub ? (r.size * 0.67).toFixed(1) : r.size) + "pt;";
+    else if (sup || sub) css += "font-size:smaller;";
     if (r.font) css += "font-family:'" + String(r.font).replace(/['\\<>]/g, "") + "';";
     if (r.color != null) css += "color:rgb(" + (r.color & 255) + "," + ((r.color >> 8) & 255) + "," + ((r.color >> 16) & 255) + ");";
+    if (r.highlight != null) css += "background-color:rgb(" + (r.highlight & 255) + "," + ((r.highlight >> 8) & 255) + "," + ((r.highlight >> 16) & 255) + ");";
     return css;
   }
   function runsHtml(runs) {
