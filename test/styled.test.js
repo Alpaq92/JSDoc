@@ -226,6 +226,12 @@ check('sample: has an empty table cell',
 check('sample: has bookmarks landing on the named text',
   Array.isArray(mshModel.bookmarks) && mshModel.bookmarks.length >= 2 &&
   mshModel.bookmarks.some(function (b) { return b.name === 'highlightedTerm'; }));
+check('sample: shows underline styles, small caps, all caps and hidden text',
+  mshRuns.some(function (r) { return r.uStyle === 'double'; }) && mshRuns.some(function (r) { return r.uStyle === 'wavy'; }) &&
+  mshRuns.some(function (r) { return r.smallCaps; }) && mshRuns.some(function (r) { return r.caps; }) && mshRuns.some(function (r) { return r.hidden; }));
+check('sample: has a vertically merged cell (restart + cont)',
+  mshRows.some(function (r) { return r.tblMerge && r.tblMerge.some(function (c) { return c && c.v === 'restart'; }); }) &&
+  mshRows.some(function (r) { return r.tblMerge && r.tblMerge.some(function (c) { return c && c.v === 'cont'; }); }));
 // A REAL Word-saved table (not our writer): its "Merge Cells" header reads back as one
 // full-width cell, and its shaded cell's fill is read from sprmTDefTableShd. Proves the
 // reader handles genuine Word output — in particular the 2-byte sprmTDefTable cb, whose
