@@ -5,99 +5,79 @@
 [![Live demo](https://img.shields.io/badge/demo-live-success)](https://alpaq92.github.io/JSDoc/)
 [![License: 0BSD](https://img.shields.io/badge/License-0BSD-blue.svg)](LICENSE)
 
-**Reads — and writes — legacy Microsoft Word `.doc` files** (Word 97–2003, the old binary OLE2 format), right in the browser, with no dependencies. Written clean-room from Microsoft's published specs, so it ships under `0BSD`.
+**Reads — and writes — legacy Microsoft Word `.doc` files** (Word 97–2003, the old binary OLE2 format), right in the browser, no dependencies. Built clean-room from Microsoft's published specs, so it ships under `0BSD` — no GPL tooling (catdoc, antiword) anywhere near it.
 
 ```js
 docToText(input)          // → body text (string), or null if it can't be read
 docToText.sections(input) // → { body, footnotes, headers, … } — text of each story
-docToText.html(input)     // → styled HTML per story (bold/italic/size/colour/font + tables)
-docToText.model(input)    // → { body, … } styled paragraph/run model (feeds the writer)
+docToText.html(input)     // → styled HTML per story
+docToText.model(input)    // → styled paragraph/run model (feeds the writer)
 docToText.images(input)   // → [{ mime, bytes }] — embedded PNG/JPEG
 textToDoc(input)          // → Uint8Array — write a .doc back (string or a styled model)
 ```
 
-`docToText` takes an `ArrayBuffer`, `Uint8Array`, or Node `Buffer`; it returns the body text, or `null` when the file is something it won't touch (Word 6/95, encrypted, not a `.doc`, corrupt) — your cue to fall back to a download link. `textToDoc` is the inverse. No GPL code anywhere near it, so the whole thing drops cleanly into a permissive codebase.
+`input` is an `ArrayBuffer`, `Uint8Array`, or Node `Buffer`. `docToText` returns `null` for anything it won't touch (Word 6/95, encrypted, not a `.doc`, corrupt) — your cue to fall back to a download link. `textToDoc` is the inverse, so a document round-trips: `textToDoc(docToText.model(buf))`.
 
 ## Try it
 
 **▶ Live demo: <https://alpaq92.github.io/JSDoc/>**
 
-![The JSDoc demo's Formatted view rendering the bundled detailed-sample.doc — its author property, a styled bullet heading, an underlined Lorem Ipsum passage, and a two-column GPL/LGPL comparison table with hyperlinked headers.](docs/demo.png)
+![The demo's Formatted view: a .doc with document properties, a styled heading, an underlined passage, and a two-column table with hyperlinked headers.](docs/demo.png)
 
-*The Formatted view renders a `.doc` straight from the same paragraph model the writer round-trips — document properties, character styling, hyperlinks, lists, and tables.*
+[`index.html`](index.html) is a no-build demo — drop a `.doc` on the page (or hit **Try a sample**) and it's parsed locally, nothing uploaded. Three views (**Formatted**, **Plain text**, **Edit**) plus **Download** as `.txt`, `.html`, or a real `.doc`. Serve the folder (`npx serve`, `python -m http.server`) or deploy to GitHub Pages — the bundled [`samples/`](samples/) mean it needs no network.
 
-[`index.html`](index.html) is a no-build demo: drop a `.doc` onto the page (or hit **Try a sample**) and it's parsed locally — nothing is uploaded. Three views — **Formatted** (styling, tables — including merged and shaded cells — lists, tab stops with leaders, footnotes/headers, and inline images, rendered from the same paragraph model the writer uses), **Plain text**, and **Edit** (editable in place) — plus **Download** as `.txt`, `.html`, or a real `.doc`.
-
-- **Locally:** serve the folder (`npx serve`, or `python -m http.server`) and open `index.html`.
-- **On GitHub Pages:** Settings → Pages → deploy from `main` / root, then it's live at <https://alpaq92.github.io/JSDoc/>. The sample in [`samples/`](samples/) is bundled, so the page needs no network at all.
-
-## Using it
-
-In the browser, `docToText` is a UMD global:
+## Usage
 
 ```html
 <script src="src/docToText.js"></script>
 <script>
   const buf = await (await fetch('/file.doc')).arrayBuffer();
-  const text = docToText(buf);
+  const text = docToText(buf);                 // UMD global in the browser
   text === null ? showDownloadLink() : showText(text);
 </script>
 ```
 
-In Node it's a plain `require`:
-
 ```js
-const docToText = require('./src/docToText.js');
-const text = docToText(require('fs').readFileSync('file.doc'));
+const docToText = require('./src/docToText.js');   // plain require in Node
+docToText(require('fs').readFileSync('file.doc'));
 ```
 
-## What you get
+## Reading
 
-The main body text and its paragraph breaks. Smart quotes and non-Latin scripts come through correctly, and field codes are stripped — you keep the result (say, the page number) and lose the `PAGE` instruction behind it. Hyperlinks are the exception: `docToText.model()` keeps both the display text **and** the URL (parsed from the `HYPERLINK` field), so links survive a round-trip through `textToDoc`.
+`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve formatting through the stylesheet, so formatting that lives in a *style* — a heading's bold, a link's blue/underline — isn't lost:
 
-`docToText.sections(input)` returns the document's separate stories — `{ body, footnotes, headers, annotations, endnotes, textboxes, headerTextboxes }` (each a string) — so **headers, footers, footnotes, endnotes, comments, and text boxes** come through too; they sit right after the body in the same piece table. `body` is exactly what `docToText()` returns.
+- `docToText.sections()` — the other stories (footnotes, endnotes, comments, headers/footers, text boxes) as separate strings.
+- `docToText.html()` / `docToText.model()` — full character styling, lists, tables, links, and images. The model feeds the writer.
+- `docToText.images()` — embedded PNG/JPEG, carved by signature.
 
-`docToText.html(input)` returns those same stories as **styled HTML** — each run wrapped in a `<span>` carrying its **bold / italic / underline / strikethrough, superscript / subscript, underline styles (double / dotted / dashed / wavy), small caps, all caps, size, colour, highlight, and font** — with `\t` between table cells and `\n` at row/paragraph breaks. Formatting is fully resolved through the stylesheet (paragraph style → character style → direct run properties), so formatting that lives in a *style* — a heading's bold, a hyperlink's blue/underline — isn't lost, not just directly-applied sprms. The demo renders this as the Formatted view.
+**Not handled:** WMF/EMF metafiles (only PNG/JPEG are extracted — rendering them needs a heavy, non-permissive converter) and exact page layout (line/page-break positions need a real layout engine). In *plain text* tables flatten to tab-separated rows; the model and Formatted view keep the real cell structure.
 
-`docToText.images(input)` returns `[{ mime, bytes }]` for **embedded raster images** (PNG/JPEG), carved by signature from the reassembled CFB streams and validated to their real end marker. (The demo renders images inline via `docToText.model()`; this API returns them as a flat set.)
+## Writing
 
-**Tracked changes are resolved as "accept all":** deleted text is dropped (the `sprmCFRMarkDel` revision mark in the CHPX bin table) and inserted text kept.
+`textToDoc(input)` ([src/textToDoc.js](src/textToDoc.js)) writes a Word 97–2003 binary `.doc` and returns a `Uint8Array`. `input` is a plain string or a styled model from `docToText.model()`, so formatting round-trips.
 
-Not handled yet (and where each would slot in):
+A `.doc` built entirely from spec round-trips through lenient parsers but **real word processors reject it** — they require a valid stylesheet, section table, and property tables, and getting every one right blind is the wall (Apache POI doesn't build one from scratch either). So the writer **injects** content into a tiny **bundled blank-document skeleton** — a genuine app-saved empty `.doc`, stripped to its structural streams — reusing those structures and swapping in the text, piece table, and freshly built property pages. Pass your own blank `.doc` as a second argument to use a different skeleton.
 
-- **Tables** flatten to one row per line with tab-separated columns in the *plain-text* output — empty cells stay as empty columns (the row end is found by its `sprmPFTtp` mark, not by counting cell marks), though horizontal merges still collapse to plain tabs. (`docToText.model()` and the demo's Formatted view keep the full cell structure — column widths, shading, horizontal **and** vertical merges (the latter rendered as `rowspan`s), and empty cells.)
-- **WMF/EMF images** — only PNG/JPEG are extracted (see `docToText.images`); the common WMF/EMF *metafiles* can't be rendered in-browser without a heavy, non-permissive converter, so they're skipped. Exact inline image *placement* isn't reconstructed either — images come out as a set.
-- **Exact page layout** (line/page-break positions, columns, precise spacing) — that needs a real layout engine, not just property resolution.
+It round-trips:
 
-## Writing a `.doc`
+- **Paragraphs** — alignment, spacing & indentation, line spacing, keep-with-next / keep-together / page-break-before, tab stops (with leaders), shading, and box borders.
+- **Characters** — bold, italic, underline (single / double / dotted / wavy), strike, super/subscript, small caps, all caps, hidden, size, colour, highlight, and font.
+- **Tables** — column widths, horizontal **and** vertical cell merges, per-cell shading, and empty cells.
+- **Stories** — footnotes, endnotes, comments, headers/footers, and text boxes (all six can coexist in one document).
+- **Document** — page setup (margins, size, landscape, columns), document properties, bookmarks, inline images, and live hyperlinks.
 
-The reverse direction. **`textToDoc(input)`** ([src/textToDoc.js](src/textToDoc.js)) writes a Word 97–2003 **binary `.doc`** and returns a `Uint8Array`. `input` is either a plain string or a **styled model** from `docToText.model()`, so you can round-trip formatting: `textToDoc(docToText.model(buf).body)`. The demo's **Download .doc** button uses the model, so a loaded document comes back out with its formatting intact.
+![One .doc written by the bundled writer and rendered by the demo, showing every feature: character extras, a tab-stop contents list, a shaded/bordered callout, a merged and shaded table with an empty cell, and a bookmarks list.](docs/feature-showcase.png)
 
-```js
-const textToDoc = require('./src/textToDoc.js');
-const docToText = require('./src/docToText.js');
-fs.writeFileSync('plain.doc', Buffer.from(textToDoc('Hello\nWorld')));        // from text
-fs.writeFileSync('rich.doc',  Buffer.from(textToDoc(docToText.model(buf).body))); // round-trip formatting
-```
+*[`samples/feature-showcase.doc`](samples/feature-showcase.doc) — every feature in one document, written by `textToDoc`, read back by `docToText`, rendered by the demo. Regenerate with `node scripts/build-sample.js`.*
 
-**How, and why it's not from scratch.** A `.doc` synthesised entirely from spec round-trips through lenient parsers but **real word processors reject it** — they require a valid stylesheet, section table, and character/paragraph property tables, and getting every one right blind is the wall (Apache POI doesn't build a `.doc` from scratch either). So the writer **injects** content into a tiny **bundled blank-document skeleton** — a genuine app-saved empty `.doc`, stripped to its `WordDocument` + `1Table` streams (FIB, stylesheet, sections, fonts), embedded in the module. It reuses those structures and swaps in the text, piece table, and freshly built CHPX/PAPX property pages. Pass your own blank `.doc` as a second argument to use a different skeleton: `textToDoc(input, myTemplateBytes)`.
-
-**Writes back:** paragraphs with **alignment** (`sprmPJc`), **spacing & indentation** (space before/after, left/right/first-line indent, and line spacing — `sprmPDyaBefore`/`sprmPDyaAfter`, `sprmPDxaLeft`/`sprmPDxaRight`/`sprmPDxaLeft1`, `sprmPDyaLine`; plus the **keep-with-next / keep-lines-together / page-break-before** flags — `sprmPFKeepFollow`/`sprmPFKeep`/`sprmPFPageBreakBefore`; and **tab stops** — each stop's position, alignment, and leader, via `sprmPChgTabsPapx`; plus paragraph **shading** (`sprmPShd`) and **box borders** (`sprmPBrcTop`/`Left`/`Bottom`/`Right` — each side's colour, width, and line type, read from the modern `Brc` or the legacy `Brc80`)), **lists** (bullet / numbered, with nesting — `sprmPIlfo`/`sprmPIlvl` against the skeleton's built-in list definitions), **character formatting** (bold / italic / underline / strike / **superscript / subscript** / **underline styles** (double / dotted / dashed / wavy) / **small caps** / **all caps** / **hidden text** / size / colour / **highlight** / **font**, as CHPX sprms — `sprmCSs` for super/subscript, `sprmCKul` for the underline kind, `sprmCFSmallCaps`/`sprmCFCaps` for caps, `sprmCFVanish` for hidden text, and `sprmCHighlight` for the 16-colour highlight; fonts the skeleton lacks are appended to its `SttbfFfn`), **tables** (cell marks + `sprmPFInTable` / `sprmPFTtp` / `sprmTDefTable` with borders, preserving each row's **column widths** — the source `rgdxaCenter` boundaries, so unequal columns aren't flattened to equal ones — plus per-cell **background shading** (`sprmTDefTableShd` with the legacy `sprmTDefTableShd80` and `sprmTCellShd`, byte-matched to a Word-saved reference) and **cell merging** (a row's wider cells for a horizontal span — Word's own representation — and the TC80 `tcgrf` flags for vertical merges), both read back into the model so shaded, merged tables render in the demo's Formatted view), **inline images** (PNG/JPEG re-embedded as an OfficeArt picture in a `Data` stream, sized and placed in the right paragraph), and **hyperlinks** (a run's URL becomes a `HYPERLINK` field — the begin/separator/end marks flagged `sprmCFSpec` plus a `PlcfFldMom` entry — so it opens as a live, clickable link, not raw `HYPERLINK "…"` text), and **footnotes** (a body reference mark plus the footnote text, written as a footnote document with `ccpFtn` + `PlcffndRef`/`PlcffndTxt`, so editors render real footnotes — verified by an independent reader's `getFootnotes()`), and **headers / footers** (the page header and footer, written into the header document via `PlcfHdd` — likewise verified by `getHeaders()`), and **endnotes** (the same machinery as footnotes — `ccpEdn` + `PlcfendRef`/`PlcfendTxt`; footnotes, endnotes, headers and footers can all coexist in one document), and **comments** (a `0x05` reference + the comment text, via `ccpAtn` + `PlcfandRef`/`PlcfandTxt` with a per-comment `ATRD` — verified by `getAnnotations()`), and **text boxes** (a floating OfficeArt shape — the drawing, the `PlcfspaMom` anchor, and the `PlcftxbxTxt` text, reverse-engineered from a one-box reference and re-emitted with the box's text). Literal tabs are preserved. All six story types — footnotes, endnotes, comments, headers, footers, and text boxes — can coexist in a single document, which opens cleanly in a real word processor. **Page setup** — margins, page size, and **orientation** (landscape) — round-trips too (the section's `SEPX`: `sprmSDyaTop`/`sprmSDyaBottom`/`sprmSDxaLeft`/`sprmSDxaRight`, `sprmSXaPage`/`sprmSYaPage`, `sprmSBOrientation`; the SEPX is relocated when it grows), with orientation verified against a landscape document the editor itself saved. The **column count** rounds-trips on `sprmSCcolumns` as well (opens clean; the multi-column *render* isn't editor-confirmable — the editor's automation won't expose columns). **Document properties** — title, subject, author, keywords, comments — round-trip as well, written into a `\x05SummaryInformation` property set ([MS-OLEPS]) and read back into `docToText.model().props`, confirmed against the editor's document-properties dialog (and the reader reads them from real third-party documents too). **Bookmarks** — named ranges of text — round-trip as well: the writer builds the `SttbfBkmk` name table plus the parallel `Plcfbkf` / `Plcfbkl` (each bookmark's start and end CPs, paired through `FBKF.ibkl` so nested or overlapping ranges resolve correctly), and the reader surfaces them as `docToText.model().bookmarks` — `[{ name, start, end }]` — which the demo's Formatted view lists with each range's text. (Byte layout verified against the [MS-DOC] worked example.)
-
-![A document written by the bundled writer and rendered in the demo's Formatted view: document properties; superscript/subscript, highlighting, double/dotted/wavy underlines, small caps, all caps, hidden (dimmed) and blue/bold/italic text; a tab-stop table of contents with dot leaders; a shaded and box-bordered callout paragraph; a table with a column-spanning merged header, red/green/yellow shaded cells, an empty cell and a vertically merged cell; and a bookmarks list.](docs/feature-showcase.png)
-
-*[`samples/feature-showcase.doc`](samples/feature-showcase.doc) — built by the writer, read back by the reader, rendered by the demo: every supported feature in one document — character extras (incl. underline styles, small/all caps, hidden text), tab stops with leaders, a shaded + bordered callout, a table with merged (horizontal + vertical), shaded and empty cells, and bookmarks. Regenerate it with `node scripts/build-sample.js`.*
-
-The output is checked three ways: read back by our `docToText` (`.model()` re-reads the table cells to prove they're real cells, not flattened tabs) *and* the unrelated `word-extractor` ([test/styled.test.js](test/styled.test.js)), and — since the lenient parsers were exactly the problem — confirmed to **open as real bold text and a real table in a word processor** (SoftMaker TextMaker), driven through its COM automation ([scripts/read-with-textmaker.ps1](scripts/read-with-textmaker.ps1)).
+Each is checked three ways: read back by `docToText`, cross-checked against the unrelated [`word-extractor`](https://github.com/morungos/node-word-extractor) ([test/styled.test.js](test/styled.test.js)), and — since lenient parsers were the whole problem — confirmed to open in a real word processor (SoftMaker TextMaker, driven through its COM automation).
 
 ## How it works
 
-Two layers, both taken straight from the spec:
+Two layers, both straight from the spec:
 
-1. **The container** ([MS-CFB](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/53989ce4-7b05-4f8d-829b-d08d6148375b)) — a `.doc` is an OLE2 compound file, essentially a little FAT-style filesystem. Parse the header, follow the sector chains, and pull out the `WordDocument` and table streams.
-2. **The text** ([MS-DOC](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/ccd7b486-7881-484c-a137-51170af7cc22)) — read the FIB header to locate the piece table, then walk the pieces, decoding each as either Windows-1252 or UTF-16 and joining them up to the body length. That's the [§2.4.1 "Retrieving Text"](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/01d5d8c4-cf9c-4ef9-80fd-439e763cfe01) algorithm.
-
-A small detail worth calling out: the compressed (8-bit) encoding [isn't quite Windows-1252](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/aa2e55a2-f4f2-4795-bab5-6d9d7a0ed249) — the spec remaps 24 specific bytes and leaves the rest as raw code points. The lookup table is copied from the spec, so bytes like `0x80`, `0x8E`, and `0x9E` decode exactly the way Word means them, not the way a generic cp1252 decoder would.
+1. **Container** ([MS-CFB](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/53989ce4-7b05-4f8d-829b-d08d6148375b)) — a `.doc` is an OLE2 compound file, a little FAT-style filesystem. Parse the header, follow the sector chains, pull out the `WordDocument` and table streams.
+2. **Text** ([MS-DOC](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/ccd7b486-7881-484c-a137-51170af7cc22)) — read the FIB to locate the piece table, then walk the pieces decoding each as Windows-1252 or UTF-16, per the [§2.4.1 "Retrieving Text"](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/01d5d8c4-cf9c-4ef9-80fd-439e763cfe01) algorithm. The 8-bit encoding [isn't quite cp1252](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/aa2e55a2-f4f2-4795-bab5-6d9d7a0ed249) — the spec remaps 24 bytes, copied verbatim, so `0x80`/`0x8E`/`0x9E` decode the way Word means.
 
 Both specs are free under Microsoft's [Open Specification Promise](https://go.microsoft.com/fwlink/?LinkId=214445), which expressly allows copying them to build an implementation — that's what makes a clean-room `0BSD` build legitimate, rather than porting GPL tools like catdoc or antiword (which were never read).
 
@@ -105,15 +85,13 @@ Both specs are free under Microsoft's [Open Specification Promise](https://go.mi
 
 ```bash
 npm test            # offline, no dependencies
-npm run test:oracle # compares against word-extractor on real .doc files
+npm run test:oracle # diff against word-extractor on real .doc files
 ```
 
-`npm test` builds a spec-valid `.doc` in memory and checks the result against a known answer — covering both storage paths, both encodings, field codes, and the graceful-`null` cases. `npm run test:oracle` downloads real Word documents and diffs our output against [word-extractor](https://github.com/morungos/node-word-extractor) (MIT) as an independent reference, used only for comparison and never copied. Verified across 15 real files.
+`npm test` builds a spec-valid `.doc` in memory and checks the result against a known answer — both storage paths, both encodings, field codes, the graceful-`null` cases, and full read/write round-trips. `npm run test:oracle` diffs our output against [word-extractor](https://github.com/morungos/node-word-extractor) (MIT, used only for comparison, never copied) across 15 real Word files.
 
 ## License
 
 [`0BSD`](LICENSE) — public-domain-equivalent, no attribution required, so it can live anywhere.
 
-The demo's bundled sample, [`samples/detailed-sample.doc`](samples/detailed-sample.doc), is a small document exercising the reader's range — styled text, a bullet list, a table, and an embedded image — with public-domain Lorem Ipsum filler text. `word-extractor` (MIT) is a dev-only test dependency (the oracle in `test/oracle.test.js`) and isn't part of the shipped code.
-
-The writer's **skeleton** (a structural empty `.doc`) and **inline-picture machinery** are reverse-engineered from blank/one-image documents saved by a real word processor (SoftMaker FreeOffice), reduced to their structural bytes and embedded into `src/textToDoc.js` as base64. They carry no authored content, so no copyrightable expression — and the source documents aren't bundled. [`scripts/embed-template.js`](scripts/embed-template.js) regenerates the skeleton embed from such a blank `.doc`.
+The bundled samples carry only public-domain Lorem Ipsum or generated content. The writer's **skeleton** and inline-picture bytes are reverse-engineered from blank documents saved by a real word processor (SoftMaker FreeOffice), reduced to structural bytes with no authored content (regenerate via [`scripts/embed-template.js`](scripts/embed-template.js)). `word-extractor` (MIT) is a dev-only test dependency, not part of the shipped code.
