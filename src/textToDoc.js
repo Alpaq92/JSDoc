@@ -806,6 +806,42 @@
       bkmkBkfOff = append(bkf); bkmkBkfLen = bkf.length;
       bkmkBklOff = append(bkl); bkmkBklLen = bkl.length;
     }
+    // List tables: synthesize a PlfLst (#73) + PlfLfo (#74) so the writer can emit
+    // real numbered (ilfo 1, "1.") and bullet (ilfo 2, "•") lists — papxForP maps
+    // number->1 / bullet->2 against these, replacing the skeleton's set (whose ilfo 1
+    // is a msonfcNone list that renders no marker). Two simple ([MS-DOC] LSTF
+    // .fSimpleList=1) lists, one LVL each; the reader's parseListDefs/makeListNumberer
+    // regenerate the markers. Byte layout per [MS-DOC] §2.9 (LSTF 28B / LVLF 28B + xst /
+    // LFO 16B / LFOData 4B), cross-checked against the skeleton's own tables (verified
+    // to open in SoftMaker TextMaker), differing only in the decimal list's nfc + text.
+    function buildListTables() {
+      function lstf(lsid) {                            // LSTF (28B), fSimpleList=1 -> one LVL follows
+        var b = new Uint8Array(28); u32(b, 0, lsid >>> 0); u32(b, 4, lsid >>> 0);   // lsid + tplc
+        for (var i = 0; i < 9; i++) u16(b, 8 + i * 2, 0x0FFF);   // rgistdPara: 0x0FFF = no linked style
+        b[26] = 0x01; return b;                        // flags: fSimpleList (grfhic at 27 = 0)
+      }
+      // LVLF(28B) + xst (cch + WCHARs), no grpprl. A number-text char < 9 is a
+      // placeholder for that level's number; rgbxch0 = rgbxchNums[0], its 1-based xst
+      // position (0 when there is none, e.g. a bullet). iStartAt=1; cbGrpprl* (24/25)=0.
+      function lvl(nfc, chars, rgbxch0) {
+        var b = new Uint8Array(30 + chars.length * 2);
+        u32(b, 0, 1); b[4] = nfc & 0xFF; b[6] = rgbxch0 & 0xFF;
+        u16(b, 28, chars.length);
+        for (var i = 0; i < chars.length; i++) u16(b, 30 + i * 2, chars[i]);
+        return b;
+      }
+      function lfo(lsid) { var b = new Uint8Array(16); u32(b, 0, lsid >>> 0); return b; }   // lsid; clfolvl(12)=0
+      function join(parts) { var n = parts.reduce(function (a, p) { return a + p.length; }, 0); return concat(parts, n); }
+      var L0 = 0x0F0A0001, L1 = 0x0F0A0002;            // unique list ids (LSTF.lsid <-> LFO.lsid)
+      var ff = new Uint8Array([0xFF, 0xFF, 0xFF, 0xFF]);   // one LFOData (clfolvl=0): the bare 4-byte field
+      // cLst(2) + 2 LSTF + decimal LVL ("<L0>." -> "1.") + bullet LVL. U+2022 is a real
+      // bullet in any text font (0xF0B7 would need the marker's CHPX to set Symbol).
+      var lst = join([new Uint8Array([2, 0]), lstf(L0), lstf(L1), lvl(0, [0x0000, 0x002E], 1), lvl(23, [0x2022], 0)]);
+      var lfoT = join([new Uint8Array([2, 0, 0, 0]), lfo(L0), lfo(L1), ff, ff]);   // lfoMac(2) + 2 LFO + 2 LFOData
+      return { lst: lst, lfo: lfoT };
+    }
+    var listTbls = buildListTables();
+    var lstTblOff = append(listTbls.lst), lfoTblOff = append(listTbls.lfo);
     var newTbl = concat([tbl].concat(blocks), off);
     // extend the section table's last CP so the section spans the whole text
     var sedFc = pairFc(6), sedLcb = pairLcb(6);
@@ -828,6 +864,8 @@
     if (atnTxtOff >= 0) setPair(5, atnTxtOff, atnTxtBytes.length); // PlcfandTxt
     if (hddOff >= 0) setPair(11, hddOff, hddBytes.length); // PlcfHdd (headers/footers)
     if (bkmkSttbOff >= 0) { setPair(21, bkmkSttbOff, bkmkSttbLen); setPair(22, bkmkBkfOff, bkmkBkfLen); setPair(23, bkmkBklOff, bkmkBklLen); } // bookmarks
+    setPair(73, lstTblOff, listTbls.lst.length); // PlfLst (numbered + bullet list definitions)
+    setPair(74, lfoTblOff, listTbls.lfo.length); // PlfLfo (list format overrides)
 
     // Page setup: rebuild the first section's SEPX from input.page. Margins
     // (sprmSDyaTop 0x9023 / Bottom 0x9024 / sprmSDxaLeft 0xB021 / Right 0xB022) and

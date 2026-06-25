@@ -443,6 +443,15 @@ var listDoc = textToDoc([
 check('bullet marker appears in plain text', /(^|\n)• Milk(\n|$)/.test(docToText(listDoc)));
 var listModel = docToText.model(listDoc).body.filter(function (p) { return p.list; });
 check('bullet marker on the model paragraphs', listModel.length === 2 && listModel.every(function (p) { return p.list.marker === '•'; }));
+// The writer synthesizes the list tables (PlfLst/PlfLfo), so a numbered list now
+// round-trips end-to-end with counted decimal markers.
+var numDoc = textToDoc([
+  { runs: [{ text: 'A' }], kind: 'p', list: { kind: 'number', ilvl: 0 } },
+  { runs: [{ text: 'B' }], kind: 'p', list: { kind: 'number', ilvl: 0 } },
+  { runs: [{ text: 'C' }], kind: 'p', list: { kind: 'number', ilvl: 0 } }
+]);
+check('numbered list round-trips with 1. 2. 3.', /(^|\n)1\. A\n2\. B\n3\. C(\n|$)/.test(docToText(numDoc)));
+check('numbered markers on the model', docToText.model(numDoc).body.filter(function (p) { return p.list; }).map(function (p) { return p.list.marker; }).join(' ') === '1. 2. 3.');
 
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
