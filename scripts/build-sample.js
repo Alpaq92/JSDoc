@@ -5,6 +5,7 @@
  * writer (src/textToDoc.js) and read back by docToText. It exercises, in one document:
  *   - document properties (title / author / subject)
  *   - character extras: superscript / subscript / highlight (+ bold / italic / underline / colour)
+ *   - a numbered list and a bulleted list (markers synthesized on read)
  *   - tab stops with a dot leader and right-aligned numbers (a table of contents)
  *   - paragraph shading + a box border (a callout)
  *   - a table: a column-spanning merged header, shaded status cells, an empty cell, a part-width merge
@@ -24,6 +25,7 @@ function cell(t, shd, vm) { var c = { runs: t ? [{ text: t }] : [], kind: 'cell'
 function rowEnd(t, shd, vm) { var c = { runs: t ? [{ text: t }] : [], kind: 'rowEnd', tblw: FULL }; if (shd != null) c.shd = shd; if (vm) c.vmerge = vm; return c; }
 function toc(label, page) { return { runs: [{ text: label + '\t' + page }], kind: 'p', pp: { tabs: [{ pos: 9000, align: 'right', leader: 'dot' }] } }; }
 function box(c) { var s = { color: c, width: 1, type: 1 }; return { top: s, left: s, bottom: s, right: s }; }
+function item(text, kind) { return { runs: [{ text: text }], kind: 'p', list: { kind: kind, ilvl: 0 } }; }   // numbered/bulleted list item
 
 function model(bookmarks) {
   return {
@@ -45,6 +47,12 @@ function model(bookmarks) {
         { text: ', and ' }, { text: 'wavy', u: true, uStyle: 'wavy' }, { text: ' underlines; ' }, { text: 'small caps', smallCaps: true },
         { text: '; ' }, { text: 'all caps', caps: true }, { text: '; and ' }, { text: 'hidden', hidden: true }, { text: ' text (shown dimmed).' }
       ], kind: 'p' }],
+      // Lists: a numbered list (1. 2. 3.) and a bulleted list. The markers are
+      // synthesized on read from the list definition — Word keeps them out of the text.
+      [{ runs: [{ text: 'How JSDoc reads a file', b: true }], kind: 'p' }],
+      [item('Open the OLE2 compound file', 'number'), item('Walk the piece table to the text', 'number'), item('Resolve formatting through the styles', 'number')],
+      [{ runs: [{ text: 'Good to know', b: true }], kind: 'p' }],
+      [item('List markers come from the list definition', 'bullet'), item('Not from the text stream itself', 'bullet')],
       // Tab stops: a small table of contents — a dot leader to a right-aligned page number.
       [{ runs: [{ text: 'Contents', b: true }], kind: 'p' }],
       [toc('Introduction', '1'), toc('Methods', '4'), toc('Results', '9')],

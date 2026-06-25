@@ -60,7 +60,7 @@ A `.doc` built entirely from spec round-trips through lenient parsers but **real
 
 It round-trips:
 
-- **Paragraphs** — alignment, spacing & indentation, line spacing, keep-with-next / keep-together / page-break-before, tab stops (with leaders), shading, and box borders.
+- **Paragraphs** — alignment, spacing & indentation, line spacing, keep-with-next / keep-together / page-break-before, tab stops (with leaders), shading, box borders, and **bullet & numbered lists** (the writer synthesizes the list tables, so numbered items come back out as `1.` `2.` `3.`).
 - **Characters** — bold, italic, underline (single / double / dotted / wavy), strike, super/subscript, small caps, all caps, hidden, size, colour, highlight, and font.
 - **Tables** — column widths, horizontal **and** vertical cell merges, per-cell shading, and empty cells.
 - **Stories** — footnotes, endnotes, comments, headers/footers, and text boxes (all six can coexist in one document).
