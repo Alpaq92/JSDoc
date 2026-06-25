@@ -425,7 +425,7 @@
         if (sp && sp.ilfo >= 1 && sp.ilfo <= 0x07FE) { ilfo = sp.ilfo; if (r.ilvl == null) ilvl = sp.ilvl || 0; }
       }
       if (!ilfo) return null;
-      return { ilvl: ilvl || 0, ilfo: ilfo, kind: (listKind && listKind[ilfo]) || 'bullet' };
+      return { ilvl: ilvl, ilfo: ilfo, kind: (listKind && listKind[ilfo]) || 'bullet' };
     }
     // Paragraph spacing/indentation (twips): left/right/first-line indent, space
     // before/after, and line spacing (LSPD: line + lineMult flag). Only non-zero
@@ -1087,13 +1087,14 @@
   // advances the counters, restarting deeper levels (so 1, 1.1, 1.2, 2, 2.1 …).
   function makeListNumberer(defsByIlfo) {
     var state = {};
+    function startOf(x) { return (x && x.startAt != null) ? x.startAt : 1; }   // a level's start value (default 1)
     return function (ilfo, ilvl) {
       var defs = defsByIlfo && defsByIlfo[ilfo];
       if (!defs) return '';
       var st = state[ilfo] || (state[ilfo] = { counters: [], started: [] });
       var d = defs[ilvl] || defs[defs.length - 1];
       if (st.started[ilvl]) st.counters[ilvl] = (st.counters[ilvl] | 0) + 1;
-      else { st.counters[ilvl] = (d && d.startAt != null) ? d.startAt : 1; st.started[ilvl] = true; }
+      else { st.counters[ilvl] = startOf(d); st.started[ilvl] = true; }
       for (var k = ilvl + 1; k < 9; k++) st.started[k] = false;   // deeper levels restart on next use
       if (!d || d.nfc === 0xFF) return '';                        // msonfcNone
       if (d.nfc === 23) return bulletGlyph(d.tmpl);               // bullet
@@ -1101,7 +1102,7 @@
       for (var ci = 0; ci < d.tmpl.length; ci++) {
         var ch = d.tmpl[ci];
         if (ch < 9) {              // placeholder: substitute level `ch`'s number (its own nfc)
-          var lc = (st.counters[ch] != null) ? st.counters[ch] : ((defs[ch] && defs[ch].startAt != null) ? defs[ch].startAt : 1);
+          var lc = (st.counters[ch] != null) ? st.counters[ch] : startOf(defs[ch]);
           out += fmtNum(lc, (defs[ch] || d).nfc);
         } else out += String.fromCharCode(ch);
       }

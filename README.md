@@ -44,7 +44,7 @@ docToText(require('fs').readFileSync('file.doc'));
 
 ## Reading
 
-`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **list markers synthesized** (`1.` / `a)` / `i.` / `•`, counted per level from the list definition, since Word keeps them out of the text stream), and **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve formatting through the stylesheet, so formatting that lives in a *style* — a heading's bold, a link's blue/underline — isn't lost:
+`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **list markers synthesized** (`1.` / `a)` / `i.` / `•`, counted per level from the list definition, since Word keeps them out of the text stream — even when a paragraph's list membership lives in its *style* rather than a direct property, as Word's built-in numbered headings do), and **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve formatting through the stylesheet, so formatting that lives in a *style* — a heading's bold, a link's blue/underline — isn't lost:
 
 - `docToText.sections()` — the other stories (footnotes, endnotes, comments, headers/footers, text boxes) as separate strings.
 - `docToText.html()` / `docToText.model()` — full character styling, lists, tables, links, and images. The model feeds the writer.
@@ -66,7 +66,7 @@ It round-trips:
 - **Stories** — footnotes, endnotes, comments, headers/footers, and text boxes (all six can coexist in one document).
 - **Document** — page setup (margins, size, landscape, columns), document properties, bookmarks, inline images, and live hyperlinks.
 
-![One .doc written by the bundled writer and rendered by the demo, showing every feature: character extras, a tab-stop contents list, a shaded/bordered callout, a merged and shaded table with an empty cell, and a bookmarks list.](docs/feature-showcase.png)
+![One .doc written by the bundled writer and rendered by the demo, showing every feature: character extras, a numbered list and a bulleted list, a tab-stop contents list, a shaded/bordered callout, a merged and shaded table with an empty cell, and a bookmarks list.](docs/feature-showcase.png)
 
 *[`samples/feature-showcase.doc`](samples/feature-showcase.doc) — every feature in one document, written by `textToDoc`, read back by `docToText`, rendered by the demo. Regenerate with `node scripts/build-sample.js`.*
 
