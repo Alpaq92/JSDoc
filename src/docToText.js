@@ -376,11 +376,12 @@
     // resolve(fc): the fully-resolved character props at a WordDocument offset,
     // layered lowest-to-highest priority ([MS-DOC] 2.4.6.2): paragraph style ->
     // character style (sprmCIstd) -> direct run props -> font name.
+    var styleChp = styles ? styles.chp : null;            // resolved character props per istd
     var resolve = chpx ? function (fc) {
       var out = {}, k, s;
-      if (styles && papx) { var pr = runAt(papx, fc); if (pr && styles[pr.istd]) { s = styles[pr.istd]; for (k in s) out[k] = s[k]; } }
+      if (styleChp && papx) { var pr = runAt(papx, fc); if (pr && styleChp[pr.istd]) { s = styleChp[pr.istd]; for (k in s) out[k] = s[k]; } }
       var r = runAt(chpx, fc), p = r ? r.p : {};
-      if (styles && p.istd != null && styles[p.istd]) { s = styles[p.istd]; for (k in s) out[k] = s[k]; }
+      if (styleChp && p.istd != null && styleChp[p.istd]) { s = styleChp[p.istd]; for (k in s) out[k] = s[k]; }
       for (k in p) if (k !== 'istd') out[k] = p[k];     // direct run props win
       if (fonts && out.ftc != null && fonts[out.ftc]) out.font = fonts[out.ftc];
       // An explicit RGB (sprmCCv) wins; otherwise fall back to the 16-colour
@@ -409,7 +410,23 @@
     var endnoteRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 46); // PlcfendRef #46 -> { bodyCp: endnoteIndex }
     var commentRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 4, 30); // PlcfandRef #4 (ATRD=30) -> { bodyCp: commentIndex }
     var textboxRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 40, 26); // PlcfspaMom #40 (FSPA=26) -> { bodyCp: shapeIndex }
-    function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, ilfo: r.ilfo, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
+    var stylePap = styles ? styles.pap : null;          // resolved paragraph props per istd
+    // A paragraph is a list item when it has a direct sprmPIlfo, OR — when it has
+    // none — when its paragraph style supplies one. Word's built-in numbered
+    // headings (and many real docs) carry the ilfo/ilvl in the linked style's
+    // PAPX, not a direct sprm, so without this fallback those items get no marker.
+    // A style ilfo counts only within the valid LFO range [1, 0x07FE]; 0x07FF and
+    // up are "not really in a list" sentinels Word writes into some built-in styles.
+    function paraList(fc) {
+      var r = papx ? runAt(papx, fc) : null; if (!r) return null;
+      var ilfo = r.ilfo, ilvl = (r.ilvl != null) ? r.ilvl : 0;
+      if (ilfo == null && stylePap && r.istd != null) {                  // no direct sprmPIlfo -> inherit list membership from the style
+        var sp = stylePap[r.istd];
+        if (sp && sp.ilfo >= 1 && sp.ilfo <= 0x07FE) { ilfo = sp.ilfo; if (r.ilvl == null) ilvl = sp.ilvl || 0; }
+      }
+      if (!ilfo) return null;
+      return { ilvl: ilvl || 0, ilfo: ilfo, kind: (listKind && listKind[ilfo]) || 'bullet' };
+    }
     // Paragraph spacing/indentation (twips): left/right/first-line indent, space
     // before/after, and line spacing (LSPD: line + lineMult flag). Only non-zero
     // values are returned, so an unspaced paragraph stays a bare model node.
@@ -675,10 +692,14 @@
     } catch (e) { return null; }
   }
 
-  // Stylesheet: STSH (Stshf at FibRgFcLcb97 #1) -> resolved character props per
-  // style index (istd), so formatting carried by a style (a heading's bold, a
-  // hyperlink's blue+underline) isn't lost. Each STD has a CHP grpprl and an
-  // istdBase parent it inherits from. [MS-DOC] STSH / STSHI / STD / STDF / UPX.
+  // Stylesheet: STSH (Stshf at FibRgFcLcb97 #1) -> resolved character AND
+  // paragraph props per style index (istd), so formatting carried by a style
+  // isn't lost: a heading's bold (CHP), or — crucially — a paragraph's list
+  // membership when the ilfo/ilvl live in the linked style's PAPX rather than a
+  // direct sprm (the common case for Word's built-in numbered headings). Each
+  // STD has a CHP grpprl, a paragraph style also a PAP grpprl (its first UPX),
+  // and an istdBase parent it inherits from. Returns { chp: [...], pap: [...] }
+  // indexed by istd. [MS-DOC] STSH / STSHI / STD / STDF / UPX / UpxPapx.
   function parseStsh(table, fibStart, fibDv) {
     try {
       var fc = fibDv.getUint32(fibStart + 1 * 8, true);   // #1 = fcStshf
@@ -690,7 +711,7 @@
       var cstd = dv.getUint16(stshi, true);               // STSHI.cstd
       var cbBase = dv.getUint16(stshi + 2, true);         // STSHI.cbSTDBaseInFile
       var p = stshi + cbStshi;                            // -> rgStd
-      // Pass 1: each style's own CHP grpprl + parent.
+      // Pass 1: each style's own CHP grpprl, a paragraph style's PAP grpprl, and parent.
       var raw = new Array(cstd);
       for (var i = 0; i < cstd && p + 2 <= end; i++) {
         var cbStd = dv.getUint16(p, true); p += 2;
@@ -702,27 +723,30 @@
         var cupx = dv.getUint16(std + 4, true) & 0xF;     // count of UPX, low 4 bits
         var nameAt = std + cbBase, cch = dv.getUint16(nameAt, true);
         var up = nameAt + 2 + cch * 2 + 2;                // past style name + chTerm
-        var chpIdx = stk === 1 ? 1 : 0;                   // para style: CHP is 2nd UPX
-        var chp = {};
+        var chpIdx = stk === 1 ? 1 : 0;                   // para style: PAP is 1st UPX, CHP is 2nd
+        var chp = {}, pap = {};
         for (var u = 0; u < cupx && up + 2 <= std + cbStd; u++) {
           var cbUpx = dv.getUint16(up, true); up += 2;
           if (u === chpIdx) chp = parseChpGrpprl(table, up, cbUpx);
+          // A paragraph style's first UPX is a UpxPapx: a 2-byte istd then grpprlPapx.
+          else if (u === 0 && stk === 1 && cbUpx >= 2) pap = parsePapGrpprl(table, dv, up + 2, up + cbUpx, up + cbUpx);
           up += cbUpx; if (up & 1) up++;                  // UPXs are padded to even
         }
-        raw[i] = { base: istdBase, chp: chp };
+        raw[i] = { base: istdBase, chp: chp, pap: pap };
       }
-      // Pass 2: resolve inheritance (parent props, then own props).
-      var out = new Array(cstd);
-      function resolve(i, depth) {
+      // Pass 2: resolve inheritance for each property set (parent props, then
+      // own props) up the istdBase chain — the same layering for CHP and PAP.
+      var outChp = new Array(cstd), outPap = new Array(cstd);
+      function resolve(field, out, i, depth) {
         if (i == null || i < 0 || i >= cstd || !raw[i] || depth > 24) return {};
         if (out[i]) return out[i];
-        var r = {}, k, base = raw[i].base !== 0x0FFF ? resolve(raw[i].base, depth + 1) : {};
+        var r = {}, k, base = raw[i].base !== 0x0FFF ? resolve(field, out, raw[i].base, depth + 1) : {};
         for (k in base) r[k] = base[k];
-        for (k in raw[i].chp) r[k] = raw[i].chp[k];
+        for (k in raw[i][field]) r[k] = raw[i][field][k];
         return (out[i] = r);
       }
-      for (var j = 0; j < cstd; j++) resolve(j, 0);
-      return out;
+      for (var j = 0; j < cstd; j++) { resolve('chp', outChp, j, 0); resolve('pap', outPap, j, 0); }
+      return { chp: outChp, pap: outPap };
     } catch (e) { return null; }
   }
 
@@ -751,12 +775,101 @@
   // Tab descriptor (TBD) fields: jc (alignment, bits 0-2) and tlc (leader, bits 3-5).
   var TAB_JC = ['left', 'center', 'right', 'decimal', 'bar'];
   var TAB_TLC = ['none', 'dot', 'hyphen', 'underscore', 'heavy', 'middot'];
+  // Decode the paragraph sprms we use from a PAP grpprl (the bytes after the
+  // leading istd): alignment, list membership (ilfo/ilvl), keep/break flags, the
+  // table row-terminator and its column/shade/merge geometry, indents, spacing,
+  // tab stops, shading and borders. Returns ONLY the keys actually present, so a
+  // style's PAP layers cleanly over its parent's (an absent sprm inherits rather
+  // than resetting). The same grpprl format appears in a PapxInFkp and in a
+  // style's UpxPapx, so both callers share this. `dv` is a DataView over `buf`
+  // (for signed reads); `cap` is the hard ceiling for variable-length reads.
+  function parsePapGrpprl(buf, dv, gStart, grpEnd, cap) {
+    var pp = {};
+    function cv24(o) { return buf[o] | (buf[o + 1] << 8) | (buf[o + 2] << 16); }  // 24-bit COLORREF (Shd/Brc fill) at byte offset o
+    for (var gp = gStart; gp + 2 <= grpEnd;) {
+      var sc = buf[gp] | (buf[gp + 1] << 8), ol = sprmOperandLen(sc, buf, gp + 2);
+      if (sc === 0x2403 || sc === 0x2461) pp.jc = buf[gp + 2];          // sprmPJc80 / sprmPJc
+      else if (sc === 0x460B) pp.ilfo = buf[gp + 2] | (buf[gp + 3] << 8); // sprmPIlfo (list)
+      else if (sc === 0x260A) pp.ilvl = buf[gp + 2];                     // sprmPIlvl (level)
+      else if (sc === 0x2405) pp.keepL = buf[gp + 2];                    // sprmPFKeep (keep lines together)
+      else if (sc === 0x2406) pp.keepN = buf[gp + 2];                    // sprmPFKeepFollow (keep with next)
+      else if (sc === 0x2407) pp.pgBrk = buf[gp + 2];                    // sprmPFPageBreakBefore
+      else if (sc === 0x2417) pp.ttp = buf[gp + 2];                      // sprmPFTtp (table-terminating paragraph = row mark)
+      else if (sc === 0xC60D || sc === 0xC615) {                         // sprmPChgTabsPapx / sprmPChgTabs: custom tab stops
+        var tcb = buf[gp + 2], end2 = gp + 3 + tcb, p2 = gp + 3;         // operand: cb, then PChgTabsDel[Close], then PChgTabsAdd
+        if (tcb !== 255 && p2 < end2 && end2 <= cap) {                   // cb == 255 is an "ignore" sentinel
+          var cDel = buf[p2]; p2 += 1 + cDel * (sc === 0xC615 ? 4 : 2);  // 0xC615's PChgTabsDelClose carries rgdxaClose too (4 bytes/entry)
+          if (p2 < end2) {
+            var cAdd = buf[p2]; p2 += 1;                                 // PChgTabsAdd: cTabs, then rgdxaAdd (XAS), then rgtbdAdd (TBD)
+            var posB = p2, tbdB = p2 + cAdd * 2;
+            if (cAdd > 0 && cAdd <= 64 && tbdB + cAdd <= end2) {
+              pp.tabs = [];
+              for (var ta = 0; ta < cAdd; ta++) {
+                var tbd = buf[tbdB + ta];                               // TBD: jc (bits 0-2), tlc (bits 3-5)
+                pp.tabs.push({ pos: dv.getInt16(posB + ta * 2, true), align: TAB_JC[tbd & 0x07] || 'left', leader: TAB_TLC[(tbd >> 3) & 0x07] || 'none' });
+              }
+            }
+          }
+        }
+      }
+      else if (sc === 0x840F) pp.indL = dv.getInt16(gp + 2, true);      // sprmPDxaLeft
+      else if (sc === 0x840E) pp.indR = dv.getInt16(gp + 2, true);      // sprmPDxaRight
+      else if (sc === 0x8411) pp.ind1 = dv.getInt16(gp + 2, true);      // sprmPDxaLeft1 (first line; <0 = hanging)
+      else if (sc === 0xA413) pp.spB = dv.getInt16(gp + 2, true);       // sprmPDyaBefore
+      else if (sc === 0xA414) pp.spA = dv.getInt16(gp + 2, true);       // sprmPDyaAfter
+      else if (sc === 0x6412) { pp.line = dv.getInt16(gp + 2, true); pp.lineMult = buf[gp + 4] | (buf[gp + 5] << 8); } // sprmPDyaLine (LSPD)
+      else if (sc === 0xD608) {                                         // sprmTDefTable: capture rgdxaCenter (column boundaries, twips)
+        var tcb2 = buf[gp + 2] | (buf[gp + 3] << 8); ol = 1 + tcb2;     // 2-byte cb exception; operand bytes = cb + 1 (Word writes cb = dataLen + 1)
+        var itc = buf[gp + 4];                                          // itcMac (number of columns)
+        if (itc > 0 && itc < 64 && gp + 5 + (itc + 1) * 2 <= cap) {
+          pp.tblw = []; for (var tt = 0; tt <= itc; tt++) pp.tblw.push(dv.getInt16(gp + 5 + tt * 2, true));
+          // rgTc80 follows rgdxaCenter; each TC80 is 20 bytes and opens with tcgrf (cell-merge flags)
+          var tcB = gp + 5 + (itc + 1) * 2, anyM = false, mg = [];
+          for (var mc = 0; mc < itc; mc++) {
+            var off = tcB + mc * 20, gf = (off + 1 < cap) ? (buf[off] | (buf[off + 1] << 8)) : 0;
+            var hm = (gf & 0x0001) ? 'start' : (gf & 0x0002) ? 'cont' : null;  // fFirstMerged / fMerged
+            var vm = (gf & 0x0040) ? 'restart' : (gf & 0x0020) ? 'cont' : null; // fVertRestart / fVertMerge
+            if (hm || vm) anyM = true;
+            mg.push((hm || vm) ? { h: hm, v: vm } : null);
+          }
+          if (anyM) pp.tblMerge = mg;
+        }
+      }
+      else if (sc === 0xD612) {                                         // sprmTDefTableShd: per-cell background (Shd, 10 bytes each)
+        var scb = buf[gp + 2], sn = Math.floor(scb / 10);              // 1-byte cb; cvFore is the fill (R,G,B,fAuto)
+        if (sn > 0 && sn < 64 && gp + 3 + sn * 10 <= cap) { pp.tblShd = []; for (var sj = 0; sj < sn; sj++) { var so = gp + 3 + sj * 10; pp.tblShd.push(buf[so + 3] === 0 ? cv24(so) : null); } }
+      }
+      else if (sc === 0xC64D) {                                         // sprmPShd: paragraph background (SHDOperand: cb + Shd 10)
+        var ps = gp + 3;                                                // Shd: cvFore(4) cvBack(4) ipat(2); fill is cvFore, else cvBack
+        if (buf[ps + 3] === 0) pp.pShd = cv24(ps);
+        else if (buf[ps + 7] === 0) pp.pShd = cv24(ps + 4);
+      }
+      else if (sc === 0x442D) {                                         // sprmPShd80: Shd80 (2 bytes): ipat<<10 | icoBack<<5 | icoFore
+        var s80 = buf[gp + 2] | (buf[gp + 3] << 8), pcv = icoCv(s80 & 0x1F);
+        if (pcv != null) pp.pShd = pcv;
+      }
+      else if (sc >= 0xC64E && sc <= 0xC651) {                          // sprmPBrcTop/Left/Bottom/Right (BrcOperand: cb=8 + Brc 8)
+        var bt = buf[gp + 8];                                           // Brc: cv(4) dptLineWidth(1) brcType(1) +2
+        if (bt && bt !== 0xFF) { (pp.pBrc = pp.pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0xC64E]] =
+          { color: buf[gp + 6] === 0 ? cv24(gp + 3) : null, width: bt < 0x40 ? buf[gp + 7] / 8 : buf[gp + 7], type: bt }; }
+      }
+      else if (sc >= 0x6424 && sc <= 0x6427) {                          // sprmPBrcTop80/... (legacy Brc80, 4 bytes)
+        var bt2 = buf[gp + 3], ico2 = buf[gp + 4];                      // Brc80: dptLineWidth, brcType, ico, flags
+        if (bt2 && bt2 !== 0xFF) { (pp.pBrc = pp.pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0x6424]] =
+          { color: icoCv(ico2), width: buf[gp + 2] / 8, type: bt2 }; }
+      }
+      gp += 2 + ol; if (ol <= 0) break;
+    }
+    return pp;
+  }
+
   // One PapxFkp page: crun at byte 511, rgfc[crun+1], then rgbx[crun] (BxPap,
   // 13 bytes each; first byte is the word offset to a PapxInFkp, 0 = default).
+  // Each run carries the paragraph's istd plus the sparse PAP props from its
+  // grpprl (parsePapGrpprl); absent props are inherited from the istd's style.
   function collectPapxFkp(wd, pageOff, runs) {
     if (pageOff < 0 || pageOff + 512 > wd.length) return;
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
-    function cv24(o) { return wd[o] | (wd[o + 1] << 8) | (wd[o + 2] << 16); }  // 24-bit COLORREF (Shd/Brc fill) at byte offset o
     var crun = wd[pageOff + 511];
     if (!crun) return;
     var bxBase = pageOff + 4 * (crun + 1);
@@ -764,94 +877,21 @@
       var a = dv.getUint32(pageOff + i * 4, true);
       var b = dv.getUint32(pageOff + (i + 1) * 4, true);
       if (b <= a) continue;
-      var bOff = wd[bxBase + i * 13], istd = 0, jc = 0, ilfo = 0, ilvl = 0;  // BxPap.bOffset
-      var indL = 0, indR = 0, ind1 = 0, spB = 0, spA = 0, line = 0, lineMult = 0, tblw = null, keepN = 0, keepL = 0, pgBrk = 0, tblShd = null, tblMerge = null, ttp = 0, tabs = null, pShd = null, pBrc = null;
+      var bOff = wd[bxBase + i * 13], istd = 0, pp = {};  // BxPap.bOffset
       if (bOff) {
-        var papx = pageOff + bOff * 2;                   // PapxInFkp
+        var papx = pageOff + bOff * 2;                    // PapxInFkp
         if (papx >= pageOff && papx < pageOff + 510) {
-          var cb = wd[papx];                             // GrpPrlAndIstd starts at:
-          var g = cb !== 0 ? papx + 1 : papx + 2;        // cb!=0 -> +1, else +2
+          var cb = wd[papx];                              // GrpPrlAndIstd starts at:
+          var g = cb !== 0 ? papx + 1 : papx + 2;         // cb!=0 -> +1, else +2
           if (g + 2 <= pageOff + 512) istd = wd[g] | (wd[g + 1] << 8);
-          // walk the grpprl (after the istd) for alignment, list, spacing/indent
           var grpEnd = cb !== 0 ? papx + 2 * cb : papx + 2 + 2 * (wd[papx + 1] || 0);
           if (grpEnd > pageOff + 512) grpEnd = pageOff + 512;
-          for (var gp = g + 2; gp + 2 <= grpEnd;) {
-            var sc = wd[gp] | (wd[gp + 1] << 8), ol = sprmOperandLen(sc, wd, gp + 2);
-            if (sc === 0x2403 || sc === 0x2461) jc = wd[gp + 2];        // sprmPJc80 / sprmPJc
-            else if (sc === 0x460B) ilfo = wd[gp + 2] | (wd[gp + 3] << 8); // sprmPIlfo (list)
-            else if (sc === 0x260A) ilvl = wd[gp + 2];                     // sprmPIlvl (level)
-            else if (sc === 0x2405) keepL = wd[gp + 2];                    // sprmPFKeep (keep lines together)
-            else if (sc === 0x2406) keepN = wd[gp + 2];                    // sprmPFKeepFollow (keep with next)
-            else if (sc === 0x2407) pgBrk = wd[gp + 2];                    // sprmPFPageBreakBefore
-            else if (sc === 0x2417) ttp = wd[gp + 2];                      // sprmPFTtp (table-terminating paragraph = row mark)
-            else if (sc === 0xC60D || sc === 0xC615) {                     // sprmPChgTabsPapx / sprmPChgTabs: custom tab stops
-              var tcb = wd[gp + 2], end2 = gp + 3 + tcb, p2 = gp + 3;      // operand: cb, then PChgTabsDel[Close], then PChgTabsAdd
-              if (tcb !== 255 && p2 < end2 && end2 <= pageOff + 512) {     // cb == 255 is an "ignore" sentinel
-                var cDel = wd[p2]; p2 += 1 + cDel * (sc === 0xC615 ? 4 : 2); // 0xC615's PChgTabsDelClose carries rgdxaClose too (4 bytes/entry)
-                if (p2 < end2) {
-                  var cAdd = wd[p2]; p2 += 1;                              // PChgTabsAdd: cTabs, then rgdxaAdd (XAS), then rgtbdAdd (TBD)
-                  var posB = p2, tbdB = p2 + cAdd * 2;
-                  if (cAdd > 0 && cAdd <= 64 && tbdB + cAdd <= end2) {
-                    tabs = [];
-                    for (var ta = 0; ta < cAdd; ta++) {
-                      var tbd = wd[tbdB + ta];                             // TBD: jc (bits 0-2), tlc (bits 3-5)
-                      tabs.push({ pos: dv.getInt16(posB + ta * 2, true), align: TAB_JC[tbd & 0x07] || 'left', leader: TAB_TLC[(tbd >> 3) & 0x07] || 'none' });
-                    }
-                  }
-                }
-              }
-            }
-            else if (sc === 0x840F) indL = dv.getInt16(gp + 2, true);      // sprmPDxaLeft
-            else if (sc === 0x840E) indR = dv.getInt16(gp + 2, true);      // sprmPDxaRight
-            else if (sc === 0x8411) ind1 = dv.getInt16(gp + 2, true);      // sprmPDxaLeft1 (first line; <0 = hanging)
-            else if (sc === 0xA413) spB = dv.getInt16(gp + 2, true);       // sprmPDyaBefore
-            else if (sc === 0xA414) spA = dv.getInt16(gp + 2, true);       // sprmPDyaAfter
-            else if (sc === 0x6412) { line = dv.getInt16(gp + 2, true); lineMult = wd[gp + 4] | (wd[gp + 5] << 8); } // sprmPDyaLine (LSPD)
-            else if (sc === 0xD608) {                                      // sprmTDefTable: capture rgdxaCenter (column boundaries, twips)
-              var tcb = wd[gp + 2] | (wd[gp + 3] << 8); ol = 1 + tcb;      // 2-byte cb exception; operand bytes = cb + 1 (Word writes cb = dataLen + 1)
-              var itc = wd[gp + 4];                                        // itcMac (number of columns)
-              if (itc > 0 && itc < 64 && gp + 5 + (itc + 1) * 2 <= pageOff + 512) {
-                tblw = []; for (var tt = 0; tt <= itc; tt++) tblw.push(dv.getInt16(gp + 5 + tt * 2, true));
-                // rgTc80 follows rgdxaCenter; each TC80 is 20 bytes and opens with tcgrf (cell-merge flags)
-                var tcB = gp + 5 + (itc + 1) * 2, anyM = false, mg = [];
-                for (var mc = 0; mc < itc; mc++) {
-                  var off = tcB + mc * 20, gf = (off + 1 < pageOff + 512) ? (wd[off] | (wd[off + 1] << 8)) : 0;
-                  var hm = (gf & 0x0001) ? 'start' : (gf & 0x0002) ? 'cont' : null;  // fFirstMerged / fMerged
-                  var vm = (gf & 0x0040) ? 'restart' : (gf & 0x0020) ? 'cont' : null; // fVertRestart / fVertMerge
-                  if (hm || vm) anyM = true;
-                  mg.push((hm || vm) ? { h: hm, v: vm } : null);
-                }
-                if (anyM) tblMerge = mg;
-              }
-            }
-            else if (sc === 0xD612) {                                      // sprmTDefTableShd: per-cell background (Shd, 10 bytes each)
-              var scb = wd[gp + 2], sn = Math.floor(scb / 10);             // 1-byte cb; cvFore is the fill (R,G,B,fAuto)
-              if (sn > 0 && sn < 64 && gp + 3 + sn * 10 <= pageOff + 512) { tblShd = []; for (var sj = 0; sj < sn; sj++) { var so = gp + 3 + sj * 10; tblShd.push(wd[so + 3] === 0 ? cv24(so) : null); } }
-            }
-            else if (sc === 0xC64D) {                                      // sprmPShd: paragraph background (SHDOperand: cb + Shd 10)
-              var ps = gp + 3;                                             // Shd: cvFore(4) cvBack(4) ipat(2); fill is cvFore, else cvBack
-              if (wd[ps + 3] === 0) pShd = cv24(ps);
-              else if (wd[ps + 7] === 0) pShd = cv24(ps + 4);
-            }
-            else if (sc === 0x442D) {                                      // sprmPShd80: Shd80 (2 bytes): ipat<<10 | icoBack<<5 | icoFore
-              var s80 = wd[gp + 2] | (wd[gp + 3] << 8), pcv = icoCv(s80 & 0x1F);
-              if (pcv != null) pShd = pcv;
-            }
-            else if (sc >= 0xC64E && sc <= 0xC651) {                       // sprmPBrcTop/Left/Bottom/Right (BrcOperand: cb=8 + Brc 8)
-              var bt = wd[gp + 8];                                         // Brc: cv(4) dptLineWidth(1) brcType(1) +2
-              if (bt && bt !== 0xFF) { (pBrc = pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0xC64E]] =
-                { color: wd[gp + 6] === 0 ? cv24(gp + 3) : null, width: bt < 0x40 ? wd[gp + 7] / 8 : wd[gp + 7], type: bt }; }
-            }
-            else if (sc >= 0x6424 && sc <= 0x6427) {                       // sprmPBrcTop80/... (legacy Brc80, 4 bytes)
-              var bt2 = wd[gp + 3], ico2 = wd[gp + 4];                     // Brc80: dptLineWidth, brcType, ico, flags
-              if (bt2 && bt2 !== 0xFF) { (pBrc = pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0x6424]] =
-                { color: icoCv(ico2), width: wd[gp + 2] / 8, type: bt2 }; }
-            }
-            gp += 2 + ol; if (ol <= 0) break;
-          }
+          pp = parsePapGrpprl(wd, dv, g + 2, grpEnd, pageOff + 512);  // grpprl follows the 2-byte istd
         }
       }
-      runs.push({ a: a, b: b, istd: istd, jc: jc, ilfo: ilfo, ilvl: ilvl, indL: indL, indR: indR, ind1: ind1, spB: spB, spA: spA, line: line, lineMult: lineMult, tblw: tblw, keepN: keepN, keepL: keepL, pgBrk: pgBrk, tblShd: tblShd, tblMerge: tblMerge, ttp: ttp, tabs: tabs, pShd: pShd, pBrc: pBrc });
+      var run = { a: a, b: b, istd: istd };
+      for (var k in pp) run[k] = pp[k];
+      runs.push(run);
     }
   }
 
