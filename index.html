@@ -259,6 +259,8 @@
   // runs their character styling, images appear INLINE where they belong (so a
   // centred image stays centred), lists become <ul>/<ol>, tables a <table>.
   var ALIGN = ["", "center", "right", "justify"];
+  // COLORREF (0x00BBGGRR) -> CSS rgb(); red is the low byte.
+  function cref(c) { return "rgb(" + (c & 255) + "," + ((c >> 8) & 255) + "," + ((c >> 16) & 255) + ")"; }
   // Paragraph spacing/indentation (model .pp, in twips) -> CSS. 20 twips = 1pt.
   // Line spacing: a multiple (lineMult set, 240=single) or an absolute pt value.
   function ppCss(pp) {
@@ -270,11 +272,11 @@
     if (pp.spB) c += "margin-top:" + (pp.spB / 20) + "pt;";
     if (pp.spA) c += "margin-bottom:" + (pp.spA / 20) + "pt;";
     if (pp.line) c += "line-height:" + (pp.lineMult ? (pp.line / 240) : (Math.abs(pp.line) / 20) + "pt") + ";";
-    if (pp.shd != null) c += "background-color:rgb(" + (pp.shd & 255) + "," + ((pp.shd >> 8) & 255) + "," + ((pp.shd >> 16) & 255) + ");";
+    if (pp.shd != null) c += "background-color:" + cref(pp.shd) + ";";
     if (pp.borders) {
       ["top", "right", "bottom", "left"].forEach(function (side) {
         var b = pp.borders[side]; if (!b) return;
-        var col = b.color == null ? "currentColor" : "rgb(" + (b.color & 255) + "," + ((b.color >> 8) & 255) + "," + ((b.color >> 16) & 255) + ")";
+        var col = b.color == null ? "currentColor" : cref(b.color);
         var st = b.type === 3 ? "double" : (b.type >= 5 && b.type <= 10) ? "dashed" : "solid";
         c += "border-" + side + ":" + (b.width || 1) + "pt " + st + " " + col + ";";
       });
@@ -298,8 +300,8 @@
     if (r.size) css += "font-size:" + (sup || sub ? (r.size * 0.67).toFixed(1) : r.size) + "pt;";
     else if (sup || sub) css += "font-size:smaller;";
     if (r.font) css += "font-family:'" + String(r.font).replace(/['\\<>]/g, "") + "';";
-    if (r.color != null) css += "color:rgb(" + (r.color & 255) + "," + ((r.color >> 8) & 255) + "," + ((r.color >> 16) & 255) + ");";
-    if (r.highlight != null) css += "background-color:rgb(" + (r.highlight & 255) + "," + ((r.highlight >> 8) & 255) + "," + ((r.highlight >> 16) & 255) + ");";
+    if (r.color != null) css += "color:" + cref(r.color) + ";";
+    if (r.highlight != null) css += "background-color:" + cref(r.highlight) + ";";
     return css;
   }
   function runsHtml(runs) {
@@ -403,7 +405,7 @@
             }
             var rs = vspan[r + "," + ci] || 1;
             var shc = (rw.shd && rw.shd[ci] != null) ? rw.shd[ci] : null;
-            var bg = (shc != null) ? "rgb(" + (shc & 0xFF) + "," + ((shc >> 8) & 0xFF) + "," + ((shc >> 16) & 0xFF) + ")" : "";
+            var bg = (shc != null) ? cref(shc) : "";
             html += "<td" + (cs > 1 ? ' colspan="' + cs + '"' : "") + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (bg ? ' style="background:' + bg + '"' : "") + ">" + (runsHtml(rw.cells[ci].runs) || "&nbsp;") + "</td>";
           }
           html += "</tr>";
