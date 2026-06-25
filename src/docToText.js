@@ -93,6 +93,9 @@
   // table cells and \n at row/paragraph breaks. Or null on failure.
   docToText.html = function (input) { var doc = parse(input); return doc ? doc.html : null; };
   docToText.model = function (input) { var doc = parse(input); return doc ? doc.model : null; };
+  // Internal list-marker helpers, exposed for unit tests (the numbered path isn't
+  // reachable through the bullet-only writer skeleton). Not part of the public API.
+  docToText._lists = { fmtNum: fmtNum, makeNumberer: makeListNumberer };
 
   // docToText.images(input) -> [{ mime, bytes }] for embedded raster images
   // (PNG/JPEG), best effort. Word stores pictures/OLE images as raw image bytes
@@ -400,12 +403,13 @@
     var dataEntry = cfb.byName['Data'], dataStream = null;
     try { dataStream = dataEntry ? cfb.getStream(dataEntry) : null; } catch (e) { }
     function paraAlign(fc) { var r = papx ? runAt(papx, fc) : null; return r ? (r.jc || 0) : 0; }
-    var listKind = parseListNfc(tableBytes, fibRgFcLcbStart, dv);
+    var listInfo = parseListDefs(tableBytes, fibRgFcLcbStart, dv);
+    var listKind = listInfo ? listInfo.kind : null, listDefs = listInfo ? listInfo.defs : null;
     var footnoteRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 2); // PlcffndRef #2 -> { bodyCp: footnoteIndex }
     var endnoteRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 46); // PlcfendRef #46 -> { bodyCp: endnoteIndex }
     var commentRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 4, 30); // PlcfandRef #4 (ATRD=30) -> { bodyCp: commentIndex }
     var textboxRefCps = parseRefCps(tableBytes, fibRgFcLcbStart, dv, 40, 26); // PlcfspaMom #40 (FSPA=26) -> { bodyCp: shapeIndex }
-    function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
+    function paraList(fc) { var r = papx ? runAt(papx, fc) : null; if (!r || !r.ilfo) return null; return { ilvl: r.ilvl || 0, ilfo: r.ilfo, kind: (listKind && listKind[r.ilfo]) || 'bullet' }; }
     // Paragraph spacing/indentation (twips): left/right/first-line indent, space
     // before/after, and line spacing (LSPD: line + lineMult flag). Only non-zero
     // values are returned, so an unspaced paragraph stays a bare model node.
@@ -433,9 +437,9 @@
     function paraRow(fc) { var r = papx ? runAt(papx, fc) : null; return r ? { ttp: !!r.ttp, tblw: r.tblw || null, tblShd: r.tblShd || null, tblMerge: r.tblMerge || null } : null; }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
-      doc[nm] = extractRange(wd, pieces, a, b, isDeleted, paraIsTtp);
+      doc[nm] = extractRange(wd, pieces, a, b, isDeleted, paraIsTtp, paraList, listDefs);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraRow, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraRow, listDefs, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
     }
     // Split the header document (PlcfHdd) into the real page header & footer for
     // the first section — skipping the footnote/endnote separator stories (0-5)
@@ -449,7 +453,7 @@
         return -1;
       };
       var grab = function (k) {
-        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraRow, null);
+        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraRow, listDefs, null);
       };
       var hK = pick([7, 10, 6]), fK = pick([9, 11, 8]);   // header: odd/first/even; footer: odd/first/even
       if (hK >= 0) doc.model.header = grab(hK);
@@ -1009,7 +1013,65 @@
     } catch (e) { return null; }
   }
 
-  function parseListNfc(table, fibStart, fibDv) {
+  // ---- list-marker synthesis ([MS-DOC] LSTF/LVL number formats) -----------
+  // Word keeps a list item's marker ("1." / "a)" / "i." / "•") in the list
+  // definition, not the text stream, so it has to be regenerated from the
+  // level's number-format code (nfc) and number-text template while counting
+  // items per level. nfc: 0 decimal, 1/2 upper/lower roman, 3/4 upper/lower
+  // letter, 23 bullet, 0xFF none; the rest fall back to decimal.
+  function romanNum(n, upper) {
+    if (n <= 0 || n >= 4000) return String(n);
+    var t = [['M', 1000], ['CM', 900], ['D', 500], ['CD', 400], ['C', 100], ['XC', 90], ['L', 50], ['XL', 40], ['X', 10], ['IX', 9], ['V', 5], ['IV', 4], ['I', 1]], s = '';
+    for (var i = 0; i < t.length; i++) while (n >= t[i][1]) { s += t[i][0]; n -= t[i][1]; }
+    return upper ? s : s.toLowerCase();
+  }
+  function letterNum(n, upper) {   // 1->A, 26->Z, 27->AA (bijective base 26)
+    var s = ''; while (n > 0) { var r = (n - 1) % 26; s = String.fromCharCode((upper ? 65 : 97) + r) + s; n = (n - r - 1) / 26; }
+    return s || String(n);
+  }
+  function fmtNum(n, nfc) {
+    if (nfc === 1) return romanNum(n, true);
+    if (nfc === 2) return romanNum(n, false);
+    if (nfc === 3) return letterNum(n, true);
+    if (nfc === 4) return letterNum(n, false);
+    return String(n);              // decimal and every non-bullet fallback
+  }
+  function bulletGlyph(tmpl) {     // the bullet level's template is the glyph char
+    var c = (tmpl && tmpl.length) ? tmpl[0] : 0x2022;
+    if (c === 0x6F || c === 0xF06F) return 'o';                  // hollow / 'o' bullet
+    if (c === 0xA7 || c === 0xF0A7 || c === 0xF0A8) return '▪'; // small square
+    if (c === 0x2D || c === 0x2013 || c === 0x2014) return '–'; // dash
+    return '•';               // round bullet — the common Word/Wingdings default
+  }
+  // Stateful counter: mark(ilfo, ilvl) returns the next marker at that level and
+  // advances the counters, restarting deeper levels (so 1, 1.1, 1.2, 2, 2.1 …).
+  function makeListNumberer(defsByIlfo) {
+    var state = {};
+    return function (ilfo, ilvl) {
+      var defs = defsByIlfo && defsByIlfo[ilfo];
+      if (!defs) return '';
+      var st = state[ilfo] || (state[ilfo] = { counters: [], started: [] });
+      var d = defs[ilvl] || defs[defs.length - 1];
+      if (st.started[ilvl]) st.counters[ilvl] = (st.counters[ilvl] | 0) + 1;
+      else { st.counters[ilvl] = (d && d.startAt != null) ? d.startAt : 1; st.started[ilvl] = true; }
+      for (var k = ilvl + 1; k < 9; k++) st.started[k] = false;   // deeper levels restart on next use
+      if (!d || d.nfc === 0xFF) return '';                        // msonfcNone
+      if (d.nfc === 23) return bulletGlyph(d.tmpl);               // bullet
+      var out = '';
+      for (var ci = 0; ci < d.tmpl.length; ci++) {
+        var ch = d.tmpl[ci];
+        if (ch < 9) {              // placeholder: substitute level `ch`'s number (its own nfc)
+          var lc = (st.counters[ch] != null) ? st.counters[ch] : ((defs[ch] && defs[ch].startAt != null) ? defs[ch].startAt : 1);
+          out += fmtNum(lc, (defs[ch] || d).nfc);
+        } else out += String.fromCharCode(ch);
+      }
+      return out;
+    };
+  }
+  // Read PlfLst + PlfLfo into { kind: {ilfo->'number'|'bullet'}, defs: {ilfo->[
+  // {nfc, startAt, tmpl}]} }. tmpl is the LVL number text (placeholder chars 0..8
+  // reference a level's number; everything else is literal). Best-effort -> null.
+  function parseListDefs(table, fibStart, fibDv) {
     try {
       var lstFc = fibDv.getUint32(fibStart + 73 * 8, true), lstLcb = fibDv.getUint32(fibStart + 73 * 8 + 4, true);
       var lfoFc = fibDv.getUint32(fibStart + 74 * 8, true), lfoLcb = fibDv.getUint32(fibStart + 74 * 8 + 4, true);
@@ -1017,19 +1079,26 @@
       var dv = new DataView(table.buffer, table.byteOffset, table.byteLength);
       var cLst = dv.getUint16(lstFc, true), p = lstFc + 2, lsts = [];
       for (var i = 0; i < cLst; i++) { lsts.push({ lsid: dv.getInt32(p, true), simple: table[p + 26] & 1 }); p += 28; }
-      var nfcByLsid = {};
-      for (i = 0; i < cLst && p + 28 <= lstFc + lstLcb; i++) {
-        var nLvl = lsts[i].simple ? 1 : 9;
-        for (var lv = 0; lv < nLvl && p + 28 <= lstFc + lstLcb; lv++) {
-          if (lv === 0) nfcByLsid[lsts[i].lsid] = table[p + 4];
-          var cchOff = p + 28 + table[p + 25] + table[p + 24];
-          var cch = cchOff + 2 <= table.length ? dv.getUint16(cchOff, true) : 0;
+      var defsByLsid = {};
+      for (i = 0; i < cLst; i++) {
+        var nLvl = lsts[i].simple ? 1 : 9, levels = [];
+        for (var lv = 0; lv < nLvl && p + 28 <= table.length; lv++) {   // LVLs follow rgLstf contiguously, often past lcbPlcfLst
+          var startAt = dv.getInt32(p, true), nfc = table[p + 4];
+          var cchOff = p + 28 + table[p + 24] + table[p + 25];   // skip LVLF(28) + grpprlChpx + grpprlPapx
+          var cch = (cchOff + 2 <= table.length) ? dv.getUint16(cchOff, true) : 0, tmpl = [];
+          for (var t = 0; t < cch && cchOff + 4 + t * 2 <= table.length; t++) tmpl.push(dv.getUint16(cchOff + 2 + t * 2, true));
+          levels.push({ nfc: nfc, startAt: startAt, tmpl: tmpl });
           p = cchOff + 2 + cch * 2;
         }
+        defsByLsid[lsts[i].lsid] = levels;
       }
-      var cLfo = dv.getUint32(lfoFc, true), q = lfoFc + 4, kind = {};
-      for (i = 0; i < cLfo && q + 16 <= lfoFc + lfoLcb; i++) { var nfc = nfcByLsid[dv.getInt32(q, true)]; kind[i + 1] = (nfc != null && nfc < 23) ? 'number' : 'bullet'; q += 16; }
-      return kind;
+      var cLfo = dv.getUint32(lfoFc, true), q = lfoFc + 4, kind = {}, defs = {};
+      for (i = 0; i < cLfo && q + 16 <= lfoFc + lfoLcb; i++) {
+        var levs = defsByLsid[dv.getInt32(q, true)];
+        if (levs) { defs[i + 1] = levs; kind[i + 1] = (levs[0] && levs[0].nfc < 23) ? 'number' : 'bullet'; }
+        q += 16;
+      }
+      return { kind: kind, defs: defs };
     } catch (e) { return null; }
   }
 
@@ -1038,10 +1107,19 @@
   // CP order (PlcPcd aCP is sorted), so we take each piece's overlap with the
   // range. Decodes, strips field codes/control marks, and drops any chars whose
   // WordDocument offset is in a tracked-deletion range (isDeleted).
-  function extractRange(wd, pieces, lo, hi, isDeleted, paraIsTtp) {
+  function extractRange(wd, pieces, lo, hi, isDeleted, paraIsTtp, paraList, listDefs) {
     if (hi <= lo) return '';
     var out = [];
     var fieldStack = []; // per open field: true while inside its instruction
+    var listNum = makeListNumberer(listDefs);   // per-range list counters
+    var atParaStart = true;                      // the next emitted char begins a paragraph
+    function startPara(fc) {                     // prepend this list item's synthesized marker
+      if (!atParaStart) return;
+      atParaStart = false;
+      if (!paraList || fieldStack.length) return;
+      var li = paraList(fc); if (!li) return;
+      var mk = listNum(li.ilfo, li.ilvl); if (mk) out.push(mk + ' ');
+    }
 
     for (var i = 0; i < pieces.length; i++) {
       var pc = pieces[i];
@@ -1057,7 +1135,9 @@
           if (isDeleted && isDeleted(base + k)) continue; // tracked-change deletion
           var byte = wd[base + k];
           if (byte === undefined) break;
-          emit(out, fieldStack, byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte), base + k, paraIsTtp);
+          var c8 = byte < 0x80 ? byte : (byte <= 0x9F ? FC_COMPRESSED_MAP[byte - 0x80] : byte);
+          startPara(base + k); emit(out, fieldStack, c8, base + k, paraIsTtp);
+          if (c8 === 0x0D) atParaStart = true;
         }
       } else {
         var u = pc.offset + start * 2;
@@ -1065,7 +1145,9 @@
           if (isDeleted && isDeleted(u + m * 2)) continue; // tracked-change deletion
           var loB = wd[u + m * 2];
           if (loB === undefined) break;
-          emit(out, fieldStack, loB | ((wd[u + m * 2 + 1] || 0) << 8), u + m * 2, paraIsTtp);
+          var c16 = loB | ((wd[u + m * 2 + 1] || 0) << 8);
+          startPara(u + m * 2); emit(out, fieldStack, c16, u + m * 2, paraIsTtp);
+          if (c16 === 0x0D) atParaStart = true;
         }
       }
     }
@@ -1185,8 +1267,9 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraRow, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraRow, listDefs, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], lastCellPara = null;
+    var listNum = makeListNumberer(listDefs);   // per-range list counters (body item markers)
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false, hidden: false };
     function props(p) {
@@ -1205,7 +1288,7 @@
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
     function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curProps.uStyle) r.uStyle = curProps.uStyle; if (curProps.smallCaps) r.smallCaps = true; if (curProps.caps) r.caps = true; if (curProps.hidden) r.hidden = true; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
-    function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
+    function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (kind === 'p' && par.list) par.list.marker = listNum(par.list.ilfo, par.list.ilvl); if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
     // Each cell mark (0x07) closes one cell; the row's terminator mark (sprmPFTtp)
     // promotes that row's last cell to the rowEnd and attaches the column boundaries /
     // shading / merge from the terminator's PAPX. Emitting per-mark (rather than counting

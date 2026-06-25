@@ -417,6 +417,33 @@ var chHtml = docToText.html(textToDoc([{ runs: [
 check('styled HTML renders superscript (vertical-align)', /vertical-align:super/.test(chHtml));
 check('styled HTML renders highlight (background-color)', /background-color:/.test(chHtml));
 
+// 11b) List-marker synthesis. Word keeps a list item's marker ("1." / "a)" / "•")
+// in the list definition, not the text stream, so the reader regenerates it.
+// The number-format + counting logic is unit-tested directly (the bullet-only
+// skeleton can't write a numbered list); bullet markers are checked end-to-end.
+var L = docToText._lists;
+check('fmtNum decimal', L.fmtNum(4, 0) === '4');
+check('fmtNum upper roman', L.fmtNum(4, 1) === 'IV');
+check('fmtNum lower roman', L.fmtNum(9, 2) === 'ix');
+check('fmtNum upper letter', L.fmtNum(1, 3) === 'A' && L.fmtNum(27, 3) === 'AA');
+check('fmtNum lower letter', L.fmtNum(2, 4) === 'b');
+// A two-level decimal list: level 0 = "N.", level 1 = "N.M".
+var num = L.makeNumberer({ 1: [{ nfc: 0, startAt: 1, tmpl: [0, 46] }, { nfc: 0, startAt: 1, tmpl: [0, 46, 1] }] });
+var seq = [[1, 0], [1, 0], [1, 1], [1, 1], [1, 0], [1, 1]].map(function (s) { return num(s[0], s[1]); });
+check('numberer counts + restarts deeper levels (1. 2. 2.1 2.2 3. 3.1)', seq.join(' ') === '1. 2. 2.1 2.2 3. 3.1');
+var alpha = L.makeNumberer({ 5: [{ nfc: 4, startAt: 1, tmpl: [0, 41] }] });   // "a)" lower-letter
+check('numberer formats a lettered list (a) b) c))', [alpha(5, 0), alpha(5, 0), alpha(5, 0)].join(' ') === 'a) b) c)');
+check('numberer ignores an unknown ilfo', L.makeNumberer({})(7, 0) === '');
+// End-to-end: the writer's bullet list comes back with a • marker in both text and model.
+var listDoc = textToDoc([
+  { runs: [{ text: 'Shopping' }], kind: 'p' },
+  { runs: [{ text: 'Milk' }], kind: 'p', list: { kind: 'bullet', ilvl: 0 } },
+  { runs: [{ text: 'Bread' }], kind: 'p', list: { kind: 'bullet', ilvl: 0 } }
+]);
+check('bullet marker appears in plain text', /(^|\n)• Milk(\n|$)/.test(docToText(listDoc)));
+var listModel = docToText.model(listDoc).body.filter(function (p) { return p.list; });
+check('bullet marker on the model paragraphs', listModel.length === 2 && listModel.every(function (p) { return p.list.marker === '•'; }));
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).

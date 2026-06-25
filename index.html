@@ -87,6 +87,10 @@
   #rich.paper .docbox.placed, #rich.paper .docbox { background: #fff; border-color: #c8ccd2; }
   /* Document properties (title/author/...) as a quiet metadata bar above the body. */
   .docprops { font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 12px; }
+  /* Lists render their own synthesized marker (1. / a) / •); suppress native bullets. */
+  ul.doclist, ol.doclist { list-style: none; margin: 4px 0; padding-left: .3em; }
+  ul.doclist li, ol.doclist li { margin: 1px 0; }
+  .doclist .li-mark { display: inline-block; min-width: 1.5em; color: var(--muted); }
   ul.bookmarks { margin: 6px 0 14px; padding-left: 20px; font-size: 13.5px; }
   ul.bookmarks li { margin: 2px 0; }
   ul.bookmarks .bkcp { color: var(--muted); font-size: 12px; }
@@ -416,8 +420,13 @@
         var inner = runsHtml(p.runs);
         if (p.list) {
           var tag = p.list.kind === "number" ? "ol" : "ul";
-          if (listTag !== tag) { closeList(); html += "<" + tag + ">"; listTag = tag; }
-          html += "<li" + (alignCss ? ' style="' + alignCss + '"' : "") + ">" + (inner || "&nbsp;") + "</li>";
+          if (listTag !== tag) { closeList(); html += "<" + tag + ' class="doclist">'; listTag = tag; }
+          // Render the reader's synthesized marker (1. / a) / i. / •) verbatim, with
+          // native list bullets suppressed; fall back to • for an unmarked bullet level.
+          var mk = (p.list.marker != null && p.list.marker !== "") ? p.list.marker : (p.list.kind === "number" ? "" : "•");
+          var indent = (p.list.ilvl || 0) * 1.5;
+          var liSt = alignCss + (indent ? "margin-left:" + indent + "em;" : "");
+          html += "<li" + (liSt ? ' style="' + liSt + '"' : "") + '><span class="li-mark">' + esc(mk) + "</span>" + (inner || "&nbsp;") + "</li>";
         } else {
           closeList();
           var st = alignCss + ppCss(p.pp);  // alignment + spacing/indentation

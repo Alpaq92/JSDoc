@@ -44,7 +44,7 @@ docToText(require('fs').readFileSync('file.doc'));
 
 ## Reading
 
-`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve formatting through the stylesheet, so formatting that lives in a *style* — a heading's bold, a link's blue/underline — isn't lost:
+`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **list markers synthesized** (`1.` / `a)` / `i.` / `•`, counted per level from the list definition, since Word keeps them out of the text stream), and **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve formatting through the stylesheet, so formatting that lives in a *style* — a heading's bold, a link's blue/underline — isn't lost:
 
 - `docToText.sections()` — the other stories (footnotes, endnotes, comments, headers/footers, text boxes) as separate strings.
 - `docToText.html()` / `docToText.model()` — full character styling, lists, tables, links, and images. The model feeds the writer.
