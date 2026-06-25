@@ -7,7 +7,7 @@
   "browser": "src/docToText.js",
   "files": ["src/docToText.js", "src/textToDoc.js", "LICENSE"],
   "scripts": {
-    "test": "node test/docToText.test.js && node test/writer.test.js && node test/styled.test.js",
+    "test": "node test/docToText.test.js && node test/writer.test.js && node test/styled.test.js && node test/style-list.test.js",
     "test:writer": "node test/writer.test.js",
     "test:styled": "node test/styled.test.js",
     "test:oracle": "node test/oracle.test.js"
