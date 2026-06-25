@@ -426,17 +426,16 @@
       if (r.pBrc) pp.borders = r.pBrc;    // box borders { top/left/bottom/right: { color, width (pt), type } }
       return Object.keys(pp).length ? pp : null;
     }
-    // The table row's column boundaries (rgdxaCenter twips), from sprmTDefTable on
-    // the row-terminator paragraph; null for non-table paragraphs.
-    function paraTblw(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblw) ? r.tblw : null; }
-    function paraTblShd(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblShd) ? r.tblShd : null; }
-    function paraTblMerge(fc) { var r = papx ? runAt(papx, fc) : null; return (r && r.tblMerge) ? r.tblMerge : null; }
-    function paraIsTtp(fc) { var r = papx ? runAt(papx, fc) : null; return !!(r && r.ttp); }   // is this 0x07 the row terminator?
+    function paraIsTtp(fc) { var r = papx ? runAt(papx, fc) : null; return !!(r && r.ttp); }   // is this 0x07 the row terminator? (plain-text path)
+    // One PAPX lookup for a row-terminator 0x07: whether it ends the row (sprmPFTtp) plus
+    // that row's column boundaries (rgdxaCenter twips) / per-cell shading / merge flags;
+    // null off the table path. Folds what used to be four separate runAt() searches into one.
+    function paraRow(fc) { var r = papx ? runAt(papx, fc) : null; return r ? { ttp: !!r.ttp, tblw: r.tblw || null, tblShd: r.tblShd || null, tblMerge: r.tblMerge || null } : null; }
     for (var bi = 0; bi < bounds.length; bi++) {
       var nm = bounds[bi][0], a = bounds[bi][1], b = bounds[bi][2];
       doc[nm] = extractRange(wd, pieces, a, b, isDeleted, paraIsTtp);
       doc.html[nm] = extractRangeStyled(wd, pieces, a, b, isDeleted, resolve);
-      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, paraIsTtp, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
+      doc.model[nm] = extractRangeModel(wd, pieces, a, b, isDeleted, resolve, nm === 'body' ? modelImages : null, imgCtr, paraAlign, nm === 'body' ? dataStream : null, paraList, paraPP, paraRow, nm === 'body' ? footnoteRefCps : null, nm === 'body' ? endnoteRefCps : null, nm === 'body' ? commentRefCps : null, nm === 'body' ? textboxRefCps : null);
     }
     // Split the header document (PlcfHdd) into the real page header & footer for
     // the first section — skipping the footnote/endnote separator stories (0-5)
@@ -450,7 +449,7 @@
         return -1;
       };
       var grab = function (k) {
-        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, paraIsTtp, null);
+        return extractRangeModel(wd, pieces, hddStart + hdd[k], hddStart + hdd[k + 1], isDeleted, resolve, null, imgCtr, paraAlign, null, paraList, paraPP, paraRow, null);
       };
       var hK = pick([7, 10, 6]), fK = pick([9, 11, 8]);   // header: odd/first/even; footer: odd/first/even
       if (hK >= 0) doc.model.header = grab(hK);
@@ -753,6 +752,7 @@
   function collectPapxFkp(wd, pageOff, runs) {
     if (pageOff < 0 || pageOff + 512 > wd.length) return;
     var dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
+    function cv24(o) { return wd[o] | (wd[o + 1] << 8) | (wd[o + 2] << 16); }  // 24-bit COLORREF (Shd/Brc fill) at byte offset o
     var crun = wd[pageOff + 511];
     if (!crun) return;
     var bxBase = pageOff + 4 * (crun + 1);
@@ -822,26 +822,26 @@
             }
             else if (sc === 0xD612) {                                      // sprmTDefTableShd: per-cell background (Shd, 10 bytes each)
               var scb = wd[gp + 2], sn = Math.floor(scb / 10);             // 1-byte cb; cvFore is the fill (R,G,B,fAuto)
-              if (sn > 0 && sn < 64 && gp + 3 + sn * 10 <= pageOff + 512) { tblShd = []; for (var sj = 0; sj < sn; sj++) { var so = gp + 3 + sj * 10; tblShd.push(wd[so + 3] === 0 ? (wd[so] | (wd[so + 1] << 8) | (wd[so + 2] << 16)) : null); } }
+              if (sn > 0 && sn < 64 && gp + 3 + sn * 10 <= pageOff + 512) { tblShd = []; for (var sj = 0; sj < sn; sj++) { var so = gp + 3 + sj * 10; tblShd.push(wd[so + 3] === 0 ? cv24(so) : null); } }
             }
             else if (sc === 0xC64D) {                                      // sprmPShd: paragraph background (SHDOperand: cb + Shd 10)
               var ps = gp + 3;                                             // Shd: cvFore(4) cvBack(4) ipat(2); fill is cvFore, else cvBack
-              if (wd[ps + 3] === 0) pShd = (wd[ps] | (wd[ps + 1] << 8) | (wd[ps + 2] << 16));
-              else if (wd[ps + 7] === 0) pShd = (wd[ps + 4] | (wd[ps + 5] << 8) | (wd[ps + 6] << 16));
+              if (wd[ps + 3] === 0) pShd = cv24(ps);
+              else if (wd[ps + 7] === 0) pShd = cv24(ps + 4);
             }
             else if (sc === 0x442D) {                                      // sprmPShd80: Shd80 (2 bytes): ipat<<10 | icoBack<<5 | icoFore
-              var s80 = wd[gp + 2] | (wd[gp + 3] << 8), icoF = s80 & 0x1F;
-              if (icoF > 1 && icoF <= 16 && ICO_CV[icoF]) pShd = ICO_CV[icoF];
+              var s80 = wd[gp + 2] | (wd[gp + 3] << 8), pcv = icoCv(s80 & 0x1F);
+              if (pcv != null) pShd = pcv;
             }
             else if (sc >= 0xC64E && sc <= 0xC651) {                       // sprmPBrcTop/Left/Bottom/Right (BrcOperand: cb=8 + Brc 8)
               var bt = wd[gp + 8];                                         // Brc: cv(4) dptLineWidth(1) brcType(1) +2
               if (bt && bt !== 0xFF) { (pBrc = pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0xC64E]] =
-                { color: wd[gp + 6] === 0 ? (wd[gp + 3] | (wd[gp + 4] << 8) | (wd[gp + 5] << 16)) : null, width: bt < 0x40 ? wd[gp + 7] / 8 : wd[gp + 7], type: bt }; }
+                { color: wd[gp + 6] === 0 ? cv24(gp + 3) : null, width: bt < 0x40 ? wd[gp + 7] / 8 : wd[gp + 7], type: bt }; }
             }
             else if (sc >= 0x6424 && sc <= 0x6427) {                       // sprmPBrcTop80/... (legacy Brc80, 4 bytes)
               var bt2 = wd[gp + 3], ico2 = wd[gp + 4];                     // Brc80: dptLineWidth, brcType, ico, flags
               if (bt2 && bt2 !== 0xFF) { (pBrc = pBrc || {})[['top', 'left', 'bottom', 'right'][sc - 0x6424]] =
-                { color: (ico2 > 1 && ico2 <= 16 && ICO_CV[ico2]) ? ICO_CV[ico2] : null, width: wd[gp + 2] / 8, type: bt2 }; }
+                { color: icoCv(ico2), width: wd[gp + 2] / 8, type: bt2 }; }
             }
             gp += 2 + ol; if (ol <= 0) break;
           }
@@ -1081,6 +1081,8 @@
   // one. Indices 0/1 (auto/black) stay 0 = "default text colour, don't store".
   var ICO_CV = [0, 0, 0xFF0000, 0xFFFF00, 0x00FF00, 0xFF00FF, 0x0000FF, 0x00FFFF,
     0xFFFFFF, 0x800000, 0x808000, 0x008000, 0x800080, 0x000080, 0x008080, 0x808080, 0xC0C0C0];
+  // A palette index (1..16) -> its COLORREF; null for auto/black sentinels (0/1) or out of range.
+  function icoCv(i) { return (i > 1 && i <= 16 && ICO_CV[i]) ? ICO_CV[i] : null; }
   // sprmCKul (underline) kind -> CSS text-decoration-style, for non-plain underlines.
   var UL_STYLE = { 3: 'double', 4: 'dotted', 7: 'dashed', 9: 'dashed', 10: 'dashed', 11: 'wavy', 20: 'wavy', 23: 'dashed' };
 
@@ -1183,7 +1185,7 @@
   // where kind is 'p' (normal paragraph), 'cell' (table cell, more cells follow
   // in the row) or 'rowEnd' (last cell of a table row). size is in points;
   // color is a COLORREF int (0x00BBGGRR) or null.
-  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraTblw, paraTblShd, paraTblMerge, paraIsTtp, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
+  function extractRangeModel(wd, pieces, lo, hi, isDeleted, resolve, images, imgCtr, paraAlign, data, paraList, paraPP, paraRow, footnoteRefs, endnoteRefs, commentRefs, textboxRefs) {
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], lastCellPara = null;
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
     var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false, hidden: false };
@@ -1191,7 +1193,7 @@
       var color = null;
       if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) color = p.cv & 0xFFFFFF; // already 0x00BBGGRR
       var va = p.iss === 1 ? 'super' : p.iss === 2 ? 'sub' : null;          // sprmCSs
-      var hl = (p.highlightIco > 1 && p.highlightIco <= 16 && ICO_CV[p.highlightIco]) ? ICO_CV[p.highlightIco] : null; // sprmCHighlight -> COLORREF
+      var hl = icoCv(p.highlightIco); // sprmCHighlight ico -> COLORREF
       return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl, uStyle: (p.u && UL_STYLE[p.u]) || null, smallCaps: !!p.smallCaps, caps: !!p.caps, hidden: !!p.hidden };
     }
     function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight + '|' + pp.uStyle + '|' + pp.smallCaps + '|' + pp.caps + '|' + pp.hidden; }
@@ -1210,14 +1212,14 @@
     // consecutive marks) keeps empty cells as real, empty cells instead of collapsing
     // the row or splitting it in two.
     function endCellMark(fc) {
-      if (paraIsTtp && paraIsTtp(fc)) {              // row terminator: close the row
+      var row = paraRow ? paraRow(fc) : null;         // one PAPX lookup per cell mark
+      if (row && row.ttp) {                           // row terminator: close the row
         buf = ''; runs = []; curKey = null; curProps = null;   // the terminator paragraph itself is empty
-        var tw = paraTblw ? paraTblw(fc) : null, ts = paraTblShd ? paraTblShd(fc) : null, tm = paraTblMerge ? paraTblMerge(fc) : null;
         if (lastCellPara && lastCellPara.kind === 'cell') {
           lastCellPara.kind = 'rowEnd';
-          if (tw) lastCellPara.tblw = tw; if (ts) lastCellPara.tblShd = ts; if (tm) lastCellPara.tblMerge = tm;
+          if (row.tblw) lastCellPara.tblw = row.tblw; if (row.tblShd) lastCellPara.tblShd = row.tblShd; if (row.tblMerge) lastCellPara.tblMerge = row.tblMerge;
         } else {
-          endPara('rowEnd', null, tw, ts, tm);       // defensive: a row with no preceding cell
+          endPara('rowEnd', null, row.tblw, row.tblShd, row.tblMerge);       // defensive: a row with no preceding cell
         }
         lastCellPara = null;
       } else {                                        // ordinary cell mark
