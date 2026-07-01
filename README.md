@@ -61,7 +61,7 @@ A `.doc` built entirely from spec round-trips through lenient parsers but **real
 It round-trips:
 
 - **Paragraphs** — alignment, spacing & indentation, line spacing, keep-with-next / keep-together / page-break-before, tab stops (with leaders), shading, box borders, and **bullet & numbered lists** (numbered items round-trip as `1.` `2.` `3.`).
-- **Characters** — bold, italic, underline (single / double / dotted / wavy), strike, super/subscript, small caps, all caps, hidden, size, colour, highlight, and font.
+- **Characters** — bold, italic, underline (single / double / dotted / wavy), strike (single & double), super/subscript, raised/lowered position, expanded/condensed spacing, small caps, all caps, hidden, size, colour, highlight, and font.
 - **Tables** — column widths, horizontal **and** vertical cell merges, per-cell shading, and empty cells.
 - **Stories** — footnotes, endnotes, comments, headers/footers, and text boxes (all six can coexist in one document).
 - **Document** — page setup (margins, size, landscape, columns), document properties, bookmarks, inline images, and live hyperlinks.

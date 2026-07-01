@@ -615,6 +615,9 @@
         case 0x083C: p.hidden = (wd[q] & 1) === 1; break;     // vanish (hidden text)
         case 0x2A3E: p.u = wd[q]; break;                       // underline kind (0 = none, 1 = single, 3 = double, ...)
         case 0x2A48: p.iss = wd[q]; break;                     // sprmCSs: 0 none, 1 superscript, 2 subscript
+        case 0x2A53: p.dstrike = (wd[q] & 1) === 1; break;     // sprmCFDStrike: double strikethrough
+        case 0x8840: p.dxaSpace = (wd[q] | (wd[q + 1] << 8)) << 16 >> 16; break;  // sprmCDxaSpace: character spacing (signed twips; + expanded, - condensed)
+        case 0x4845: p.hpsPos = (wd[q] | (wd[q + 1] << 8)) << 16 >> 16; break;    // sprmCHpsPos: character position (signed half-points; + raised, - lowered)
         case 0x2A0C: p.highlightIco = wd[q]; break;            // sprmCHighlight: 16-colour palette index (0 = none)
         case 0x4A43: p.hps = wd[q] | (wd[q + 1] << 8); break;  // font size, half-points
         case 0x2A42: p.ico = wd[q]; break;                     // color, 16-colour palette index
@@ -1221,15 +1224,18 @@
     if (p.i) css += 'font-style:italic;';
     var deco = '';
     if (p.u) deco += 'underline ';
-    if (p.strike) deco += 'line-through ';
+    if (p.strike || p.dstrike) deco += 'line-through ';
     if (deco) css += 'text-decoration:' + deco.trim() + ';';
-    if (p.u && UL_STYLE[p.u]) css += 'text-decoration-style:' + UL_STYLE[p.u] + ';';  // double / dotted / dashed / wavy
+    if (p.dstrike) css += 'text-decoration-style:double;';                              // sprmCFDStrike: double strikethrough
+    else if (p.u && UL_STYLE[p.u]) css += 'text-decoration-style:' + UL_STYLE[p.u] + ';';  // double / dotted / dashed / wavy
     if (p.smallCaps) css += 'font-variant:small-caps;';
     if (p.caps) css += 'text-transform:uppercase;';
     if (p.hidden) css += 'opacity:0.5;';                                      // hidden text (sprmCFVanish) — dimmed, not dropped
     var sup = p.iss === 1, sub = p.iss === 2;                                 // super/subscript: raise/lower and shrink
     if (sup) css += 'vertical-align:super;';
     else if (sub) css += 'vertical-align:sub;';
+    else if (p.hpsPos) css += 'vertical-align:' + (p.hpsPos / 2).toFixed(1) + 'pt;';  // sprmCHpsPos: exact raise/lower, no resize
+    if (p.dxaSpace) css += 'letter-spacing:' + (p.dxaSpace / 20).toFixed(1) + 'pt;';  // sprmCDxaSpace: expanded/condensed
     if (p.hps) css += 'font-size:' + ((sup || sub) ? (p.hps / 2 * 0.67).toFixed(1) : (p.hps / 2)) + 'pt;';
     else if (sup || sub) css += 'font-size:smaller;';
     if (p.font) css += "font-family:'" + p.font.replace(/['\\<>]/g, '') + "';";
@@ -1312,15 +1318,15 @@
     var paras = [], runs = [], buf = '', curKey = null, curProps = null, fieldStack = [], lastCellPara = null;
     var listNum = makeListNumberer(listDefs);   // per-range list counters (body item markers)
     var instr = '', inInstr = false, curUrl = null; // hyperlink field: instruction text + the URL it yields
-    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false, hidden: false };
+    var EMPTY = { b: false, i: false, u: false, strike: false, size: null, font: null, color: null, va: null, highlight: null, uStyle: null, smallCaps: false, caps: false, hidden: false, dstrike: false, spacing: null, position: null };
     function props(p) {
       var color = null;
       if (p.cv != null && (p.cv & 0xFFFFFF) !== 0) color = p.cv & 0xFFFFFF; // already 0x00BBGGRR
       var va = p.iss === 1 ? 'super' : p.iss === 2 ? 'sub' : null;          // sprmCSs
       var hl = icoCv(p.highlightIco); // sprmCHighlight ico -> COLORREF
-      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl, uStyle: (p.u && UL_STYLE[p.u]) || null, smallCaps: !!p.smallCaps, caps: !!p.caps, hidden: !!p.hidden };
+      return { b: !!p.b, i: !!p.i, u: !!p.u, strike: !!p.strike, size: p.hps ? p.hps / 2 : null, font: p.font || null, color: color, va: va, highlight: hl, uStyle: (p.u && UL_STYLE[p.u]) || null, smallCaps: !!p.smallCaps, caps: !!p.caps, hidden: !!p.hidden, dstrike: !!p.dstrike, spacing: p.dxaSpace ? p.dxaSpace / 20 : null, position: p.hpsPos ? p.hpsPos / 2 : null };
     }
-    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight + '|' + pp.uStyle + '|' + pp.smallCaps + '|' + pp.caps + '|' + pp.hidden; }
+    function key(pp) { return pp.b + '|' + pp.i + '|' + pp.u + '|' + pp.strike + '|' + pp.size + '|' + pp.font + '|' + pp.color + '|' + pp.va + '|' + pp.highlight + '|' + pp.uStyle + '|' + pp.smallCaps + '|' + pp.caps + '|' + pp.hidden + '|' + pp.dstrike + '|' + pp.spacing + '|' + pp.position; }
     // A HYPERLINK field instruction is `HYPERLINK "addr" [switches]`; the address
     // is the first quoted token (or first bare token for an unquoted URL).
     function parseHyperlink(s) {
@@ -1328,7 +1334,7 @@
       var q = /"([^"]+)"/.exec(m[1]); if (q) return q[1];
       var t = /(\S+)/.exec(m[1]); return t ? t[1] : null;
     }
-    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curProps.uStyle) r.uStyle = curProps.uStyle; if (curProps.smallCaps) r.smallCaps = true; if (curProps.caps) r.caps = true; if (curProps.hidden) r.hidden = true; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
+    function flushRun() { if (buf) { var r = { text: buf, b: curProps.b, i: curProps.i, u: curProps.u, strike: curProps.strike, size: curProps.size, font: curProps.font, color: curProps.color }; if (curProps.va) r.va = curProps.va; if (curProps.highlight != null) r.highlight = curProps.highlight; if (curProps.uStyle) r.uStyle = curProps.uStyle; if (curProps.smallCaps) r.smallCaps = true; if (curProps.caps) r.caps = true; if (curProps.hidden) r.hidden = true; if (curProps.dstrike) r.dstrike = true; if (curProps.spacing != null) r.spacing = curProps.spacing; if (curProps.position != null) r.position = curProps.position; if (curUrl) r.url = curUrl; runs.push(r); buf = ''; } }
     function endPara(kind, fc, tblw, tblShd, tblMerge) { flushRun(); var pp = (paraPP && fc != null) ? paraPP(fc) : null; var par = { runs: runs, kind: kind, align: (paraAlign && fc != null) ? paraAlign(fc) : 0, list: (paraList && fc != null) ? paraList(fc) : null }; if (kind === 'p' && par.list) par.list.marker = listNum(par.list.ilfo, par.list.ilvl); if (pp) par.pp = pp; if (tblw) par.tblw = tblw; if (tblShd) par.tblShd = tblShd; if (tblMerge) par.tblMerge = tblMerge; paras.push(par); runs = []; curKey = null; curProps = null; }
     // Each cell mark (0x07) closes one cell; the row's terminator mark (sprmPFTtp)
     // promotes that row's last cell to the rowEnd and attaches the column boundaries /
