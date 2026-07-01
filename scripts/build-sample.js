@@ -5,6 +5,7 @@
  * writer (src/textToDoc.js) and read back by docToText. It exercises, in one document:
  *   - document properties (title / author / subject)
  *   - character extras: superscript / subscript / highlight (+ bold / italic / underline / colour)
+ *   - advanced character spacing: expanded/condensed spacing, raised/lowered position, double strike
  *   - a numbered list and a bulleted list (markers synthesized on read)
  *   - tab stops with a dot leader and right-aligned numbers (a table of contents)
  *   - paragraph shading + a box border (a callout)
@@ -46,6 +47,12 @@ function model(bookmarks) {
         { text: 'Also: ' }, { text: 'double', u: true, uStyle: 'double' }, { text: ', ' }, { text: 'dotted', u: true, uStyle: 'dotted' },
         { text: ', and ' }, { text: 'wavy', u: true, uStyle: 'wavy' }, { text: ' underlines; ' }, { text: 'small caps', smallCaps: true },
         { text: '; ' }, { text: 'all caps', caps: true }, { text: '; and ' }, { text: 'hidden', hidden: true }, { text: ' text (shown dimmed).' }
+      ], kind: 'p' }],
+      // Advanced character spacing: expanded/condensed letter-spacing, raised/lowered position, double strike.
+      [{ runs: [
+        { text: 'Advanced: ' }, { text: 'double-struck', dstrike: true }, { text: ', ' }, { text: 'expanded', spacing: 2 },
+        { text: ' and ' }, { text: 'condensed', spacing: -0.7 }, { text: ' spacing, plus ' }, { text: 'raised', position: 3 },
+        { text: ' and ' }, { text: 'lowered', position: -3 }, { text: ' text.' }
       ], kind: 'p' }],
       // Lists: a numbered list (1. 2. 3.) and a bulleted list. The markers are
       // synthesized on read from the list definition — Word keeps them out of the text.

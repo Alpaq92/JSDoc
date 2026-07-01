@@ -292,15 +292,18 @@
     var css = "";
     if (r.b) css += "font-weight:bold;";
     if (r.i) css += "font-style:italic;";
-    var deco = (r.u ? "underline " : "") + (r.strike ? "line-through" : "");
+    var deco = (r.u ? "underline " : "") + (r.strike || r.dstrike ? "line-through" : "");
     if (deco.trim()) css += "text-decoration:" + deco.trim() + ";";
-    if (r.u && r.uStyle) css += "text-decoration-style:" + r.uStyle + ";";   // double / dotted / dashed / wavy
+    if (r.dstrike) css += "text-decoration-style:double;";                   // double strikethrough
+    else if (r.u && r.uStyle) css += "text-decoration-style:" + r.uStyle + ";";   // double / dotted / dashed / wavy
     if (r.smallCaps) css += "font-variant:small-caps;";
     if (r.caps) css += "text-transform:uppercase;";
     if (r.hidden) css += "opacity:0.5;";   // hidden text — dimmed, not dropped
     var sup = r.va === "super", sub = r.va === "sub";   // super/subscript: raise/lower and shrink ~2/3
     if (sup) css += "vertical-align:super;";
     else if (sub) css += "vertical-align:sub;";
+    else if (r.position) css += "vertical-align:" + r.position + "pt;";   // exact raise/lower (sprmCHpsPos)
+    if (r.spacing) css += "letter-spacing:" + r.spacing + "pt;";          // expanded/condensed (sprmCDxaSpace)
     if (r.size) css += "font-size:" + (sup || sub ? (r.size * 0.67).toFixed(1) : r.size) + "pt;";
     else if (sup || sub) css += "font-size:smaller;";
     if (r.font) css += "font-family:'" + String(r.font).replace(/['\\<>]/g, "") + "';";

@@ -163,10 +163,13 @@
     if (r.smallCaps) sprm(b, 0x083A, [1]);    // sprmCFSmallCaps
     if (r.caps) sprm(b, 0x083B, [1]);         // sprmCFCaps (all caps)
     if (r.hidden) sprm(b, 0x083C, [1]);       // sprmCFVanish (hidden text)
+    if (r.dstrike) sprm(b, 0x2A53, [1]);      // sprmCFDStrike (double strikethrough)
     if (r.u) sprm(b, 0x2A3E, [WR_UL[r.uStyle] || 1]);  // sprmCKul (1 single, 3 double, 4 dotted, 7 dash, 11 wave)
     if (r.va === 'super') sprm(b, 0x2A48, [1]);          // sprmCSs = 1 (superscript)
     else if (r.va === 'sub') sprm(b, 0x2A48, [2]);       // sprmCSs = 2 (subscript)
     if (r.size) { var hp = Math.round(r.size * 2); sprm(b, 0x4A43, [hp, hp >> 8]); }      // sprmCHps (half-points)
+    if (r.spacing) { var ds = Math.round(r.spacing * 20); sprm(b, 0x8840, [ds & 0xFF, (ds >> 8) & 0xFF]); }  // sprmCDxaSpace (character spacing, twips)
+    if (r.position) { var cpos = Math.round(r.position * 2); sprm(b, 0x4845, [cpos & 0xFF, (cpos >> 8) & 0xFF]); } // sprmCHpsPos (character position, half-points)
     if (r.color != null) sprm(b, 0x6870, [r.color, r.color >> 8, r.color >> 16, 0]);     // sprmCCv (COLORREF)
     if (r.highlight != null) sprm(b, 0x2A0C, [icoOf(r.highlight) & 0xFF]);                // sprmCHighlight (16-colour palette index)
     if (ftc != null) sprm(b, 0x4A4F, [ftc, ftc >> 8]);   // sprmCRgFtc0 (font index into SttbfFfn)
@@ -357,6 +360,9 @@
     if (r.smallCaps) n.smallCaps = true;                   // small caps
     if (r.caps) n.caps = true;                             // all caps
     if (r.hidden) n.hidden = true;                         // hidden text
+    if (r.dstrike) n.dstrike = true;                       // double strikethrough
+    if (r.spacing) n.spacing = r.spacing;                  // character spacing (pt; + expanded, - condensed)
+    if (r.position) n.position = r.position;               // character position (pt; + raised, - lowered)
     if (r.url) n.url = String(r.url);
     return n;
   }

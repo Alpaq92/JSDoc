@@ -453,6 +453,25 @@ var numDoc = textToDoc([
 check('numbered list round-trips with 1. 2. 3.', /(^|\n)1\. A\n2\. B\n3\. C(\n|$)/.test(docToText(numDoc)));
 check('numbered markers on the model', docToText.model(numDoc).body.filter(function (p) { return p.list; }).map(function (p) { return p.list.marker; }).join(' ') === '1. 2. 3.');
 
+// 11c) Advanced character formatting: double strikethrough (sprmCFDStrike), character
+// spacing (sprmCDxaSpace, expanded/condensed) and position (sprmCHpsPos, raised/lowered),
+// including negative values.
+var advDoc = textToDoc([{ runs: [
+  { text: 'ds', dstrike: true }, { text: 'ex', spacing: 2 }, { text: 'co', spacing: -0.7 },
+  { text: 'up', position: 3 }, { text: 'dn', position: -3 }
+], kind: 'p' }]);
+var advRuns = docToText.model(advDoc).body[0].runs;
+function findRun(t) { return advRuns.find(function (r) { return r.text === t; }) || {}; }
+check('double strikethrough round-trips', findRun('ds').dstrike === true);
+check('expanded spacing round-trips', findRun('ex').spacing === 2);
+check('condensed (negative) spacing round-trips', findRun('co').spacing === -0.7);
+check('raised position round-trips', findRun('up').position === 3);
+check('lowered (negative) position round-trips', findRun('dn').position === -3);
+var advHtml = docToText.html(advDoc).body;
+check('styled HTML: double-strike style', /text-decoration:line-through;text-decoration-style:double/.test(advHtml));
+check('styled HTML: letter-spacing', /letter-spacing:2\.0pt/.test(advHtml));
+check('styled HTML: raised via vertical-align pt', /vertical-align:3\.0pt/.test(advHtml));
+
 // 12) Independent oracle: word-extractor must still parse the styled .doc AND read
 // the footnote + header + endnote we wrote (proves those PLCs are structurally
 // valid, not orphaned text the body parser happens to skip).
