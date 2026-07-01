@@ -44,7 +44,7 @@ docToText(require('fs').readFileSync('file.doc'));
 
 ## Reading
 
-`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **list markers synthesized** (`1.` / `a)` / `i.` / `•`, counted per level from the list definition, since Word keeps them out of the text stream — even when a paragraph's list membership lives in its *style* rather than a direct property, as Word's built-in numbered headings do), and **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve formatting through the stylesheet, so formatting that lives in a *style* — a heading's bold, a link's blue/underline — isn't lost:
+`docToText()` returns the body text — smart quotes and non-Latin scripts intact, field codes stripped to their result, **list markers synthesized** from the list definition (`1.` / `a)` / `•`, counted per level — including headings that carry their numbering in a paragraph *style*), and **tracked changes accepted** (deletions dropped, insertions kept). The richer views resolve character formatting through the stylesheet too, so a heading's bold or a link's blue/underline isn't lost:
 
 - `docToText.sections()` — the other stories (footnotes, endnotes, comments, headers/footers, text boxes) as separate strings.
 - `docToText.html()` / `docToText.model()` — full character styling, lists, tables, links, and images. The model feeds the writer.
@@ -60,7 +60,7 @@ A `.doc` built entirely from spec round-trips through lenient parsers but **real
 
 It round-trips:
 
-- **Paragraphs** — alignment, spacing & indentation, line spacing, keep-with-next / keep-together / page-break-before, tab stops (with leaders), shading, box borders, and **bullet & numbered lists** (the writer synthesizes the list tables, so numbered items come back out as `1.` `2.` `3.`).
+- **Paragraphs** — alignment, spacing & indentation, line spacing, keep-with-next / keep-together / page-break-before, tab stops (with leaders), shading, box borders, and **bullet & numbered lists** (numbered items round-trip as `1.` `2.` `3.`).
 - **Characters** — bold, italic, underline (single / double / dotted / wavy), strike, super/subscript, small caps, all caps, hidden, size, colour, highlight, and font.
 - **Tables** — column widths, horizontal **and** vertical cell merges, per-cell shading, and empty cells.
 - **Stories** — footnotes, endnotes, comments, headers/footers, and text boxes (all six can coexist in one document).
